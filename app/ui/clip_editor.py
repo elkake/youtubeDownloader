@@ -27,6 +27,8 @@ class ClipEditorWindow:
         on_apply: Callable[[tuple[float, float] | None], None],
         video_url: str,
         on_resolution_change: Callable[[Any, str], None],
+        initial_resolution: str,
+        initial_volume: int,
     ) -> None:
         self.window = tk.Toplevel(parent)
         self.window.title(f"Editor de audio - {title}")
@@ -40,7 +42,7 @@ class ClipEditorWindow:
         self.on_apply = on_apply
         self.video_url = video_url
         self.on_resolution_change = on_resolution_change
-        self._current_resolution = "Automática"
+        self._current_resolution = initial_resolution
         self.duration = max(1.0, float(duration or 1))
         self._updating_seek = False
         self.start_time = tk.StringVar(value="00:00")
@@ -124,6 +126,28 @@ class ClipEditorWindow:
         self.resolution_combo.bind(
             "<<ComboboxSelected>>", self._on_resolution_selected
         )
+        ttk.Label(
+            quality_controls,
+            text="Volumen",
+            style="PanelMuted.TLabel",
+        ).pack(side="left", padx=(14, 8))
+        self.volume_value = tk.DoubleVar(value=initial_volume)
+        self.volume_bar = ttk.Scale(
+            quality_controls,
+            from_=0,
+            to=100,
+            variable=self.volume_value,
+            command=self._set_volume,
+            length=110,
+        )
+        self.volume_bar.pack(side="left")
+        self.volume_label = ttk.Label(
+            quality_controls,
+            text=f"{initial_volume}%",
+            style="PanelMuted.TLabel",
+            width=5,
+        )
+        self.volume_label.pack(side="left", padx=(5, 0))
 
         range_controls = ttk.Frame(controls, style="Panel.TFrame")
         range_controls.grid(row=3, column=0, columnspan=3, sticky="ew")
@@ -228,6 +252,8 @@ class ClipEditorWindow:
             self.playback_status.set("VLC no pudo iniciar la reproducción.")
         else:
             self.play_button.configure(text="Ⅱ Pausar")
+            self._apply_volume()
+            self.window.after(500, self._apply_volume)
 
     def toggle_playback(self) -> None:
         if self.player.is_playing():
@@ -237,6 +263,15 @@ class ClipEditorWindow:
             self.playback_status.set("No se pudo reproducir el video.")
         else:
             self.play_button.configure(text="Ⅱ Pausar")
+
+    def _set_volume(self, value: str) -> None:
+        volume = max(0, min(100, int(float(value))))
+        self.player.audio_set_volume(volume)
+        self.volume_label.configure(text=f"{volume}%")
+
+    def _apply_volume(self) -> None:
+        if self.window.winfo_exists():
+            self.player.audio_set_volume(round(self.volume_value.get()))
 
     def _space_to_toggle(self, _event: tk.Event) -> str:
         if self.window.focus_get() not in (self.start_entry, self.end_entry):
@@ -340,6 +375,7 @@ class ClipEditorWindow:
             if not self.window.winfo_exists():
                 return
             self.player.set_time(position_ms)
+            self._apply_volume()
             if was_playing:
                 self.play_button.configure(text="Ⅱ Pausar")
             else:
@@ -382,17 +418,19 @@ class SearchPreviewWindow:
         palette: dict[str, str],
         video_url: str,
         on_resolution_change: Callable[[Any, str], None],
+        initial_resolution: str,
+        initial_volume: int,
     ) -> None:
         self.duration = max(1.0, float(duration or 1))
         self._updating_seek = False
         self._seeking = False
-        self._current_resolution = "Automática"
+        self._current_resolution = initial_resolution
         self.video_url = video_url
         self.on_resolution_change = on_resolution_change
         self.window = tk.Toplevel(parent)
         self.window.title(title)
-        self.window.geometry("680x485")
-        self.window.minsize(560, 390)
+        self.window.geometry("680x515")
+        self.window.minsize(560, 420)
         self.window.transient(parent)
         self.window.configure(background=palette["background"])
         self.window.protocol("WM_DELETE_WINDOW", self.close)
@@ -469,6 +507,28 @@ class SearchPreviewWindow:
         self.resolution_combo.bind(
             "<<ComboboxSelected>>", self._on_resolution_selected
         )
+        ttk.Label(
+            controls,
+            text="Volumen",
+            style="PanelMuted.TLabel",
+        ).grid(row=2, column=0, sticky="w", pady=(8, 0))
+        self.volume_value = tk.DoubleVar(value=initial_volume)
+        self.volume_bar = ttk.Scale(
+            controls,
+            from_=0,
+            to=100,
+            variable=self.volume_value,
+            command=self._set_volume,
+        )
+        self.volume_bar.grid(row=2, column=1, sticky="ew", pady=(8, 0))
+        self.volume_label = ttk.Label(
+            controls,
+            text=f"{initial_volume}%",
+            style="PanelMuted.TLabel",
+            width=5,
+            anchor="e",
+        )
+        self.volume_label.grid(row=2, column=2, sticky="e", pady=(8, 0))
 
         try:
             self.instance, self.player = create_video_player(
@@ -501,6 +561,8 @@ class SearchPreviewWindow:
             self.play_button.configure(text="▶ Reproducir")
         else:
             self.play_button.configure(text="Ⅱ Pausar")
+            self._apply_volume()
+            self.window.after(500, self._apply_volume)
 
     def toggle_playback(self) -> None:
         if self.player.is_playing():
@@ -508,6 +570,15 @@ class SearchPreviewWindow:
             self.play_button.configure(text="▶ Reproducir")
         elif self.player.play() != -1:
             self.play_button.configure(text="Ⅱ Pausar")
+
+    def _set_volume(self, value: str) -> None:
+        volume = max(0, min(100, int(float(value))))
+        self.player.audio_set_volume(volume)
+        self.volume_label.configure(text=f"{volume}%")
+
+    def _apply_volume(self) -> None:
+        if self.window.winfo_exists():
+            self.player.audio_set_volume(round(self.volume_value.get()))
 
     def _seek(self, value: str) -> None:
         if self._seeking:
@@ -575,6 +646,7 @@ class SearchPreviewWindow:
             if not self.window.winfo_exists():
                 return
             self.player.set_time(position_ms)
+            self._apply_volume()
             if not was_playing:
                 self.player.pause()
             self.play_button.configure(

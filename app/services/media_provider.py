@@ -12,6 +12,7 @@ import yt_dlp
 
 MAX_SEARCH_RESULTS = 30
 PREVIEW_RESOLUTIONS = (
+    "Más baja",
     "Automática",
     "144p",
     "240p",
@@ -82,6 +83,7 @@ class YtDlpMediaProvider:
         video_url: str,
         messages: queue.Queue[tuple[str, object]],
         max_height: int | None = None,
+        prefer_lowest: bool = False,
     ) -> tuple[str, dict[str, str], str | None, dict[str, str]]:
         """Resolve preview video and, if needed, its separate audio stream."""
         options = {
@@ -104,11 +106,11 @@ class YtDlpMediaProvider:
             and candidate.get("acodec") not in (None, "none")
         ]
         selected_format = self._select_preview_format(
-            combined_formats, max_height
+            combined_formats, max_height, prefer_lowest
         )
         if selected_format:
             return (
-            selected_format["url"],
+                selected_format["url"],
                 selected_format.get("http_headers")
                 or info.get("http_headers")
                 or {},
@@ -119,6 +121,7 @@ class YtDlpMediaProvider:
         stream = info.get("url")
         if (
             stream
+            and not prefer_lowest
             and info.get("vcodec") not in (None, "none")
             and info.get("acodec") not in (None, "none")
             and (
@@ -139,6 +142,7 @@ class YtDlpMediaProvider:
                 and candidate.get("acodec") not in (None, "none")
             ],
             max_height,
+            prefer_lowest,
         )
         if selected_format:
             return (
@@ -160,26 +164,51 @@ class YtDlpMediaProvider:
             if candidate.get("url") and candidate.get("acodec") not in (None, "none")
         ]
         if video_formats and audio_formats:
-            video_format = self._select_preview_format(video_formats, max_height)
+            video_format = self._select_preview_format(
+                video_formats, max_height, prefer_lowest
+            )
             if video_format is None:
                 raise ValueError(
                     "yt-dlp no encontró un formato de video compatible para "
                     "la resolución seleccionada."
                 )
-            audio_format = max(
-                audio_formats,
-                key=lambda candidate: (
-                    candidate.get("protocol") in {"https", "http"},
-                    candidate.get("abr") or 0,
-                    candidate.get("tbr") or 0,
-                ),
-            )
+            if prefer_lowest:
+                audio_format = min(
+                    audio_formats,
+                    key=lambda candidate: (
+                        candidate.get("abr")
+                        or candidate.get("tbr")
+                        or float("inf"),
+                        candidate.get("protocol") not in {"https", "http"},
+                    ),
+                )
+            else:
+                audio_format = max(
+                    audio_formats,
+                    key=lambda candidate: (
+                        candidate.get("protocol") in {"https", "http"},
+                        candidate.get("abr") or 0,
+                        candidate.get("tbr") or 0,
+                    ),
+                )
             return (
                 video_format["url"],
                 video_format.get("http_headers") or info.get("http_headers") or {},
                 audio_format["url"],
                 audio_format.get("http_headers") or info.get("http_headers") or {},
             )
+
+        if (
+            stream
+            and info.get("vcodec") not in (None, "none")
+            and info.get("acodec") not in (None, "none")
+            and (
+                max_height is None
+                or not info.get("height")
+                or info.get("height") <= max_height
+            )
+        ):
+            return stream, info.get("http_headers") or {}, None, {}
 
         raise ValueError(
             "yt-dlp no encontró formatos de video y audio compatibles para la "
@@ -191,6 +220,7 @@ class YtDlpMediaProvider:
     def _select_preview_format(
         formats: list[dict[str, Any]],
         max_height: int | None,
+        prefer_lowest: bool = False,
     ) -> dict[str, Any] | None:
         if not formats:
             return None
@@ -209,6 +239,15 @@ class YtDlpMediaProvider:
             if known_heights and not within_limit:
                 return None
             candidates = within_limit or formats
+        if prefer_lowest and max_height is None:
+            return min(
+                candidates,
+                key=lambda candidate: (
+                    candidate.get("height") or float("inf"),
+                    candidate.get("tbr") or float("inf"),
+                    candidate.get("protocol") not in {"https", "http"},
+                ),
+            )
         if max_height is not None:
             return max(
                 candidates,

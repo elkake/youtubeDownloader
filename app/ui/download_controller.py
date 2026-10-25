@@ -8,6 +8,7 @@ import subprocess
 import threading
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date
 from pathlib import Path
 import tkinter as tk
 from tkinter import messagebox
@@ -126,11 +127,20 @@ class DownloadControllerMixin:
         self._search_preview_generation += 1
         generation = self._search_preview_generation
         self._search_preview_loading = True
+        resolution = self.preview_resolution.get()
         self.item_widgets[index]["play_button"].configure(state="disabled")
         self.status.set(f"Preparando vista previa: {item['title']}")
         threading.Thread(
             target=self._load_search_preview_stream,
-            args=(item["url"], item["title"], item.get("duration"), index, generation),
+            args=(
+                item["url"],
+                item["title"],
+                item.get("duration"),
+                index,
+                generation,
+                resolution,
+                self.preview_volume,
+            ),
             daemon=True,
         ).start()
 
@@ -141,14 +151,22 @@ class DownloadControllerMixin:
         duration: float | None,
         index: int,
         generation: int,
+        resolution: str,
+        volume: int,
     ) -> None:
         try:
+            max_height = self._preview_max_height(resolution)
             (
                 stream_url,
                 http_headers,
                 audio_stream_url,
                 audio_http_headers,
-            ) = self.media_provider.resolve_preview_stream(video_url, self.messages)
+            ) = self.media_provider.resolve_preview_stream(
+                video_url,
+                self.messages,
+                max_height,
+                prefer_lowest=resolution == "Más baja",
+            )
             self.messages.put(
                 (
                     "search_preview_ready",
@@ -162,6 +180,8 @@ class DownloadControllerMixin:
                         http_headers,
                         audio_stream_url,
                         audio_http_headers,
+                        resolution,
+                        volume,
                     ),
                 )
             )
@@ -224,6 +244,7 @@ class DownloadControllerMixin:
     def _update_search_queue_button(self) -> None:
         if self.download_mode.get() != "search":
             self.search_queue_button.pack_forget()
+            self.search_queue_clear_button.pack_forget()
             return
         text = (
             f"Volver a resultados ({len(self.search_results)})"
@@ -243,7 +264,17 @@ class DownloadControllerMixin:
             self.search_queue_download_button.configure(
                 state="normal" if enabled else "disabled"
             )
+            self.search_queue_sidebar_clear_button.configure(
+                state="normal" if enabled else "disabled"
+            )
         self.search_queue_button.pack(fill="x", pady=(0, 5), ipady=2)
+        if self._search_view == "queue" and self.search_queue:
+            self.search_queue_clear_button.configure(
+                state="disabled" if self.downloading or self._loading else "normal"
+            )
+            self.search_queue_clear_button.pack(fill="x", pady=(0, 5), ipady=2)
+        else:
+            self.search_queue_clear_button.pack_forget()
 
     def _toggle_search_queue_view(self) -> None:
         if self.download_mode.get() != "search" or self.downloading:
@@ -340,6 +371,29 @@ class DownloadControllerMixin:
             self.bottom_action_button.configure(state="disabled")
         self._update_search_queue_button()
 
+    def _clear_search_queue(self) -> None:
+        if self.download_mode.get() != "search" or self.downloading or not self.search_queue:
+            return
+        self.search_queue.clear()
+        self._refresh_search_queue_sidebar()
+        if self._search_view == "queue":
+            self._show_items([])
+            self.metadata_ready = False
+            self.playlist_stats.configure(text="0 videos en la cola")
+            self.status.set("La cola está vacía. Busca videos y añádelos.")
+            self.download_all_button.configure(state="disabled")
+            self.bottom_action_button.configure(state="disabled")
+            self._set_action_text("Añade videos a la cola para descargarlos")
+        else:
+            for index, item in enumerate(self.search_results):
+                if index < len(self.item_widgets):
+                    self.item_widgets[index]["add_button"].configure(
+                        state="disabled" if self.downloading or self._loading else "normal"
+                    )
+            self.status.set("Se vació la lista de videos.")
+        self._append_log("Se vació la cola de búsqueda.")
+        self._update_search_queue_button()
+
     def _remove_search_queue_sidebar_item(self, index: int) -> None:
         if self.download_mode.get() != "search" or not 0 <= index < len(self.search_queue):
             return
@@ -400,7 +454,13 @@ class DownloadControllerMixin:
         item = self.items[0]
         threading.Thread(
             target=self._load_preview_stream,
-            args=(item["url"], item["title"], item.get("duration")),
+            args=(
+                item["url"],
+                item["title"],
+                item.get("duration"),
+                self.preview_resolution.get(),
+                self.preview_volume,
+            ),
             daemon=True,
         ).start()
 
@@ -419,14 +479,22 @@ class DownloadControllerMixin:
         video_url: str,
         title: str,
         duration: float | None,
+        resolution: str,
+        volume: int,
     ) -> None:
         try:
+            max_height = self._preview_max_height(resolution)
             (
                 stream_url,
                 http_headers,
                 audio_stream_url,
                 audio_http_headers,
-            ) = self.media_provider.resolve_preview_stream(video_url, self.messages)
+            ) = self.media_provider.resolve_preview_stream(
+                video_url,
+                self.messages,
+                max_height,
+                prefer_lowest=resolution == "Más baja",
+            )
             self.messages.put(
                 (
                     "preview_ready",
@@ -438,18 +506,29 @@ class DownloadControllerMixin:
                         http_headers,
                         audio_stream_url,
                         audio_http_headers,
+                        resolution,
+                        volume,
                     ),
                 )
             )
         except Exception as error:
             self.messages.put(("preview_failed", str(error)))
 
+    @staticmethod
+    def _preview_max_height(resolution: str) -> int | None:
+        if resolution in {"Automática", "Más baja"}:
+            return None
+        try:
+            return int(resolution.removesuffix("p"))
+        except ValueError as error:
+            raise ValueError(f"Resolución no válida: {resolution}") from error
+
     def _request_preview_quality(
         self,
         target_window: Any,
         resolution: str,
     ) -> None:
-        if resolution == "Automática":
+        if resolution in {"Automática", "Más baja"}:
             max_height = None
         else:
             try:
@@ -484,6 +563,7 @@ class DownloadControllerMixin:
                 video_url,
                 self.messages,
                 max_height,
+                prefer_lowest=resolution == "Más baja",
             )
             self.messages.put(
                 (
@@ -596,6 +676,7 @@ class DownloadControllerMixin:
         self._reset_metadata()
         self._search_query = query
         self._set_loading(True)
+        self._set_search_loading(True)
         self.metadata_ready = False
         self._set_controls_enabled(False)
         self.analyze_button.configure(text="Buscando...")
@@ -740,6 +821,9 @@ class DownloadControllerMixin:
                 selected_indices,
                 self.embed_metadata.get(),
                 self.clip_section if self.download_mode.get() == "single" else None,
+                self.concurrent_downloads,
+                self.download_mode.get() == "playlist",
+                self.music_styles.copy(),
             ),
             daemon=True,
         ).start()
@@ -751,47 +835,62 @@ class DownloadControllerMixin:
         selected_indices: list[int] | None = None,
         embed_metadata: bool = True,
         clip_section: tuple[float, float] | None = None,
+        max_workers: int = 2,
+        playlist_mode: bool = False,
+        music_styles: list[str] | None = None,
     ) -> None:
-        """Download selected tracks sequentially while keeping Tk calls on its thread."""
-        playlist_directory = output_directory
-        if not single_video and self.items:
-            folder_name = self.media_provider.sanitize_filename(
+        """Download selected tracks concurrently and publish worker events."""
+        playlist_name: str | None = None
+        if playlist_mode and self.items:
+            playlist_name = self.media_provider.sanitize_filename(
                 getattr(self, "playlist_title", "Playlist")
             ) or "Playlist"
-            playlist_directory = output_directory / folder_name
-            try:
-                playlist_directory.mkdir(parents=True, exist_ok=True)
-            except OSError as error:
-                self.messages.put(("download_setup_failed", str(error)))
-                return
 
         failed = 0
+        failures: list[tuple[int, str, str, Path]] = []
+        allowed_styles = set(music_styles or [])
         download_indices = (
             selected_indices if selected_indices is not None else list(range(len(self.items)))
         )
-        for index in download_indices:
+
+        def download_one(index: int) -> tuple[int, str, str, Path] | None:
             item = self.items[index]
             video_url = item.get("url")
-            if not video_url:
-                failed += 1
-                self.messages.put(
-                    ("item_error", (index, "No se encontró el enlace del video."))
-                )
-                continue
-            if single_video and clip_section is not None:
-                output_template = "%(title)s - fragmento.%(ext)s"
-            elif single_video:
-                output_template = "%(title)s.%(ext)s"
-            else:
-                output_template = f"{index + 1:03d} - %(title)s.%(ext)s"
-            progress_hook = (
-                lambda data, item_index=index: self._download_progress(item_index, data)
-            )
-            self.messages.put(("item_status", (index, "Preparando...")))
+            destination_directory = output_directory
             try:
+                music_style = item.get("music_style") or ""
+                if music_style and music_style not in allowed_styles:
+                    raise ValueError(f"El estilo musical ya no está disponible: {music_style}")
+                destination_directory = (
+                    output_directory / music_style if music_style else output_directory
+                )
+                if playlist_name:
+                    destination_directory /= playlist_name
+                destination_directory.mkdir(parents=True, exist_ok=True)
+                if not video_url:
+                    error_message = "No se encontró el enlace del video."
+                    self.messages.put(("item_error", (index, error_message)))
+                    return (
+                        index,
+                        "URL no disponible",
+                        error_message,
+                        destination_directory,
+                    )
+                if single_video and clip_section is not None:
+                    output_template = "%(title)s - fragmento.%(ext)s"
+                elif single_video and len(download_indices) == 1:
+                    output_template = "%(title)s.%(ext)s"
+                else:
+                    output_template = f"{index + 1:03d} - %(title)s.%(ext)s"
+                progress_hook = (
+                    lambda data, item_index=index: self._download_progress(
+                        item_index, data
+                    )
+                )
+                self.messages.put(("item_status", (index, "Preparando...")))
                 output_path = self.media_provider.download_audio(
                     video_url,
-                    playlist_directory / output_template,
+                    destination_directory / output_template,
                     progress_hook,
                     self.messages,
                     embed_metadata,
@@ -799,8 +898,47 @@ class DownloadControllerMixin:
                 )
                 self.messages.put(("item_done", (index, output_path)))
             except Exception as error:
-                failed += 1
                 self.messages.put(("item_error", (index, str(error))))
+                return (
+                    index,
+                    str(video_url or "URL no disponible"),
+                    str(error),
+                    destination_directory,
+                )
+            return None
+
+        if download_indices:
+            worker_count = min(max(2, min(max_workers, 16)), len(download_indices))
+            try:
+                with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                    futures = [
+                        executor.submit(download_one, index)
+                        for index in download_indices
+                    ]
+                    for future in as_completed(futures):
+                        failure = future.result()
+                        if failure:
+                            failures.append(failure)
+                            failed += 1
+            except Exception as error:
+                self.messages.put(("download_setup_failed", str(error)))
+                return
+        if failures and playlist_mode:
+            failure_logs: dict[Path, list[tuple[int, str, str]]] = {}
+            for index, failed_url, error, folder in failures:
+                failure_logs.setdefault(folder, []).append((index, failed_url, error))
+            for folder, folder_failures in failure_logs.items():
+                failure_log = folder / f"fallas_{date.today().isoformat()}.txt"
+                try:
+                    with failure_log.open(
+                        "a", encoding="utf-8", newline="\n"
+                    ) as log_file:
+                        for _, failed_url, error in sorted(folder_failures):
+                            log_file.write(f"URL: {failed_url}\nError: {error}\n\n")
+                except OSError as error:
+                    self.messages.put(("failure_log_failed", str(error)))
+                else:
+                    self.messages.put(("failure_log_written", str(failure_log)))
         self.messages.put(("download_complete", (failed, len(download_indices))))
 
     def _download_progress(self, index: int, data: dict[str, Any]) -> None:
@@ -852,6 +990,8 @@ class DownloadControllerMixin:
                             self._set_clip_section,
                             video_url,
                             self._request_preview_quality,
+                            resolution,
+                            volume,
                         )
                     except RuntimeError as error:
                         self.clip_editor_window = None
@@ -896,6 +1036,8 @@ class DownloadControllerMixin:
                         http_headers,
                         audio_stream_url,
                         audio_http_headers,
+                        resolution,
+                        volume,
                     ) = value
                     if generation != self._search_preview_generation:
                         continue
@@ -914,6 +1056,8 @@ class DownloadControllerMixin:
                             self.palette,
                             video_url,
                             self._request_preview_quality,
+                            resolution,
+                            volume,
                         )
                     except RuntimeError as error:
                         self.search_preview_window = None
@@ -1019,6 +1163,12 @@ class DownloadControllerMixin:
                         continue
                     self.metadata_ready = True
                     self._set_loading(False)
+                    if (
+                        isinstance(value, tuple)
+                        and len(value) == 2
+                        and value[0] == "search"
+                    ):
+                        self._set_search_loading(False)
                     self._set_controls_enabled(True)
                     self.analyze_button.configure(
                         text="Buscar videos"
@@ -1063,6 +1213,7 @@ class DownloadControllerMixin:
                     if generation != self._search_generation:
                         continue
                     self._set_loading(False)
+                    self._set_search_loading(False)
                     self._set_controls_enabled(True)
                     self.analyze_button.configure(text="Buscar videos")
                     self.download_all_button.configure(state="disabled")
@@ -1163,6 +1314,14 @@ class DownloadControllerMixin:
                         )
                     else:
                         self._append_log("Todos los audios se descargaron correctamente.")
+                elif event == "failure_log_written":
+                    self._append_log(f"URLs fallidas guardadas en: {value}")
+                elif event == "failure_log_failed":
+                    self._append_log(f"No se pudo guardar el archivo de fallas: {value}")
+                    messagebox.showerror(
+                        "No se pudo guardar el registro de fallas",
+                        f"Las canciones fallidas no se pudieron registrar.\n\n{value}",
+                    )
                 elif event == "download_setup_failed":
                     self.downloading = False
                     self._set_controls_enabled(True)

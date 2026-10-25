@@ -63,6 +63,15 @@ class LayoutMixin:
 
         window_controls = ttk.Frame(title_bar, style="App.TFrame")
         window_controls.pack(side="right")
+        self.settings_button = self._create_button(
+            window_controls,
+            text="⚙",
+            command=self._open_settings,
+            width=2,
+            height=26,
+            background_role="background",
+        )
+        self.settings_button.pack(side="left", padx=2)
         self.minimize_button = self._create_button(
             window_controls,
             text="—",
@@ -225,6 +234,14 @@ class LayoutMixin:
         )
         self.search_queue_button.pack(fill="x", pady=(0, 5), ipady=2)
         self.search_queue_button.pack_forget()
+        self.search_queue_clear_button = self._create_button(
+            summary_actions,
+            text="Vaciar lista",
+            command=self._clear_search_queue,
+            background_role="surface",
+        )
+        self.search_queue_clear_button.pack(fill="x", pady=(0, 5), ipady=2)
+        self.search_queue_clear_button.pack_forget()
         self.pause_all_button = self._create_button(
             summary_actions,
             text="Ⅱ  Pausar todo",
@@ -510,7 +527,15 @@ class LayoutMixin:
         )
         search_results_panel.grid(row=3, column=0, sticky="nsew")
         search_results_panel.columnconfigure(0, weight=1)
-        search_results_panel.rowconfigure(0, weight=1)
+        search_results_panel.rowconfigure(1, weight=1)
+        self.search_loading_bar = ttk.Progressbar(
+            search_results_panel,
+            mode="indeterminate",
+        )
+        self.search_loading_bar.grid(
+            row=0, column=0, columnspan=2, sticky="ew", padx=8, pady=(8, 0)
+        )
+        self.search_loading_bar.grid_remove()
         self.search_canvas = tk.Canvas(
             search_results_panel,
             background=self.palette["surface"],
@@ -523,8 +548,8 @@ class LayoutMixin:
             palette=self.palette,
         )
         self.search_canvas.configure(yscrollcommand=self.search_scrollbar.set)
-        self.search_canvas.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=8)
-        self.search_scrollbar.grid(row=0, column=1, sticky="ns", padx=(2, 8), pady=8)
+        self.search_canvas.grid(row=1, column=0, sticky="nsew", padx=(8, 0), pady=8)
+        self.search_scrollbar.grid(row=1, column=1, sticky="ns", padx=(2, 8), pady=8)
         self.search_results_frame = ttk.Frame(
             self.search_canvas,
             style="Panel.TFrame",
@@ -647,7 +672,16 @@ class LayoutMixin:
             background_role="surface",
         )
         self.search_queue_download_button.grid(
-            row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0), ipady=3
+            row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0), ipady=3
+        )
+        self.search_queue_sidebar_clear_button = self._create_button(
+            search_queue_panel,
+            text="Vaciar lista",
+            command=self._clear_search_queue,
+            background_role="surface",
+        )
+        self.search_queue_sidebar_clear_button.grid(
+            row=3, column=0, columnspan=2, sticky="ew", pady=(8, 0), ipady=2
         )
         self._refresh_search_queue_sidebar()
         self.root.bind_all("<MouseWheel>", self._scroll_under_pointer)
@@ -731,7 +765,13 @@ class LayoutMixin:
             initialdir=self.output_directory.get(), title="Elegir carpeta de destino"
         )
         if folder:
-            self.output_directory.set(folder)
+            self._save_settings(
+                folder,
+                self.preview_resolution.get(),
+                self.preview_volume,
+                self.concurrent_downloads,
+                self.music_styles,
+            )
 
     def _paste_url(self) -> None:
         try:
@@ -862,6 +902,7 @@ class LayoutMixin:
             song = ttk.Frame(row, style="Panel.TFrame")
             song.grid(row=0, column=2, sticky="ew", padx=4)
             song.columnconfigure(1, weight=1)
+            item.setdefault("music_style", "")
             cover = ttk.Label(
                 song, text="♫", anchor="center", width=7, style="Cover.TLabel"
             )
@@ -884,6 +925,30 @@ class LayoutMixin:
                 wraplength=160,
             )
             artist.grid(row=1, column=1, sticky="nw")
+            music_style_value = tk.StringVar(
+                value=item.get("music_style") or "Sin estilo"
+            )
+            music_style_controls = ttk.Frame(song, style="Panel.TFrame")
+            music_style_controls.grid(row=2, column=1, sticky="w", pady=(3, 0))
+            ttk.Label(
+                music_style_controls,
+                text="Estilo:",
+                style="PanelMuted.TLabel",
+            ).pack(side="left", padx=(0, 5))
+            music_style_combo = ttk.Combobox(
+                music_style_controls,
+                textvariable=music_style_value,
+                values=("Sin estilo", *self.music_styles),
+                state="readonly",
+                width=12,
+            )
+            music_style_combo.pack(side="left")
+            music_style_combo.bind(
+                "<<ComboboxSelected>>",
+                lambda _event, current_item=item, variable=music_style_value: (
+                    self._set_item_music_style(current_item, variable.get())
+                ),
+            )
 
             duration = ttk.Label(
                 row,
@@ -977,6 +1042,9 @@ class LayoutMixin:
                 "checkbox": checkbox,
                 "image": None,
                 "output_path": None,
+                "item": item,
+                "music_style_value": music_style_value,
+                "music_style_combo": music_style_combo,
             }
             item_widget["show_location"] = show_location
             self.item_widgets.append(item_widget)
@@ -1118,11 +1186,33 @@ class LayoutMixin:
         self.select_all.set(False)
         self._update_selection_count()
 
+    def _set_item_music_style(self, item: dict[str, Any], selected_style: str) -> None:
+        if selected_style != "Sin estilo" and selected_style not in self.music_styles:
+            raise ValueError(f"El estilo musical no está disponible: {selected_style}")
+        item["music_style"] = (
+            "" if selected_style == "Sin estilo" else selected_style
+        )
+        for widgets in self.item_widgets:
+            if widgets.get("item") is item:
+                variable = widgets.get("music_style_value")
+                if variable is not None:
+                    variable.set(selected_style)
+        for queued_item, variable, _combo in self.search_queue_sidebar_widgets:
+            if queued_item is item:
+                variable.set(selected_style)
+        if selected_style == "Sin estilo":
+            self.status.set(f"{item['title']} se guardará en la carpeta base.")
+        else:
+            self.status.set(
+                f"{item['title']} se guardará en la carpeta «{selected_style}»."
+            )
+
     def _refresh_search_queue_sidebar(self) -> None:
         if not hasattr(self, "search_queue_frame"):
             return
         for child in self.search_queue_frame.winfo_children():
             child.destroy()
+        self.search_queue_sidebar_widgets = []
         count = len(self.search_queue)
         noun = "video añadido" if count == 1 else "videos añadidos"
         self.search_queue_count_label.configure(text=f"{count} {noun}")
@@ -1142,6 +1232,7 @@ class LayoutMixin:
             )
             self.search_queue_empty_label.grid(row=0, column=0, sticky="ew")
         for index, item in enumerate(self.search_queue):
+            item.setdefault("music_style", "")
             row = ttk.Frame(
                 self.search_queue_frame,
                 style="QueueRow.TFrame",
@@ -1158,13 +1249,33 @@ class LayoutMixin:
                 justify="left",
             )
             title.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+            style_value = tk.StringVar(
+                value=item.get("music_style") or "Sin estilo"
+            )
+            style_combo = ttk.Combobox(
+                row,
+                textvariable=style_value,
+                values=("Sin estilo", *self.music_styles),
+                state="readonly" if not self.downloading else "disabled",
+                width=17,
+            )
+            style_combo.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+            style_combo.bind(
+                "<<ComboboxSelected>>",
+                lambda _event, current_item=item, variable=style_value: (
+                    self._set_item_music_style(current_item, variable.get())
+                ),
+            )
+            self.search_queue_sidebar_widgets.append(
+                (item, style_value, style_combo)
+            )
             remove_button = ttk.Button(
                 row,
                 text="×",
                 command=lambda item_index=index: self._remove_search_queue_sidebar_item(item_index),
                 style="Icon.TButton",
             )
-            remove_button.grid(row=0, column=1, sticky="ne")
+            remove_button.grid(row=0, column=1, rowspan=2, sticky="ne")
 
     def _prune_destroyed_buttons(self) -> None:
         self.rounded_buttons = [
@@ -1265,6 +1376,14 @@ class LayoutMixin:
             self.loading_bar.stop()
             self.loading_bar.grid_remove()
 
+    def _set_search_loading(self, active: bool) -> None:
+        if active:
+            self.search_loading_bar.grid()
+            self.search_loading_bar.start(12)
+        else:
+            self.search_loading_bar.stop()
+            self.search_loading_bar.grid_remove()
+
     def _append_log(self, message: str) -> None:
         self.log.configure(state="normal")
         self.log.insert("end", f"{message}\n")
@@ -1297,6 +1416,16 @@ class LayoutMixin:
         self.search_page_button.configure(state=state)
         self.search_single_button.configure(state=state)
         self.search_playlist_button.configure(state=state)
+        self.settings_button.configure(state=state)
         self._update_search_queue_button()
         for widgets in self.item_widgets:
             widgets["checkbox"].configure(state=state)
+            music_style_combo = widgets.get("music_style_combo")
+            if music_style_combo is not None:
+                music_style_combo.configure(
+                    state="readonly" if enabled else "disabled"
+                )
+        for _item, _variable, music_style_combo in self.search_queue_sidebar_widgets:
+            music_style_combo.configure(
+                state="readonly" if enabled else "disabled"
+            )

@@ -6,16 +6,27 @@ sesión y descargar el audio como MP3.
 La ventana usa el icono `youMP3gmr.ico`, muestra el nombre de la aplicación
 en su cabecera y ofrece controles integrados para minimizar,
 maximizar/restaurar y cerrar.
+El botón ⚙ junto a minimizar permite guardar la resolución inicial de las vistas
+previas, el volumen de inicio, la carpeta de descarga, el número de descargas
+simultáneas (de 2 a 16; inicialmente 2) y los estilos musicales que quieras
+reutilizar. Las preferencias se conservan al cerrar y volver a abrir la aplicación,
+en `%APPDATA%\youMP3gmr\settings.json`.
+En Ajustes también puedes guardar tus estilos musicales. El selector **Estilo**
+de cada canción permite organizarla en una subcarpeta de la carpeta base; si
+descargas una playlist, se conserva su carpeta dentro del estilo elegido.
+Sin estilo, la descarga va a la carpeta base (o a la carpeta de la playlist).
 
 ## Estructura del proyecto
 
 ```text
 main.py                         Punto de entrada
 app/
+  config/settings.py            Preferencias persistentes del usuario
   config/theme.py               Colores y tema predeterminado
   services/media_provider.py    Adaptador de yt-dlp y carga de portadas
   ui/main_window.py             Ventana y estado compartido
   ui/layout.py                  Componentes y cola visual
+  ui/settings_window.py         Ajustes, carpeta y estilos musicales
   ui/theme.py                   Aplicación de temas
   ui/widgets.py                 Controles reutilizables
   ui/image_adapter.py           Adaptador de Pillow para las imágenes
@@ -112,12 +123,15 @@ las canciones que quieres procesar y pulsa
 En modo **Buscar en YouTube**, se abre una pantalla de búsqueda independiente
 de los modos canción y playlist. Escribe canciones, artistas o videos para ver
 hasta 30 resultados en una cuadrícula de tres columnas con miniaturas, título,
-canal y duración. Pulsa **▶** para abrir una vista previa con reproducción,
-pausa, barra de avance y cierre; requiere VLC de 64 bits. El selector
-**Resolución de reproducción** permite elegir Automática o hasta 144p, 240p, 360p,
-480p, 720p o 1080p. Puedes desplazarte por los resultados y la lista lateral
-con la rueda del mouse. Pulsa **+** para agregar un video. A la derecha se
+canal y duración; aparece una barra de carga mientras se buscan resultados.
+Pulsa **▶** para abrir una vista previa con reproducción, pausa, barra de avance,
+volumen y cierre; requiere VLC de 64 bits. La vista previa empieza con la
+resolución más baja disponible para cargar más rápido. El selector
+**Resolución de reproducción** permite elegir Más baja, Automática o hasta 144p,
+240p, 360p, 480p, 720p o 1080p. Puedes desplazarte por los resultados y la lista
+lateral con la rueda del mouse. Pulsa **+** para agregar un video. A la derecha se
 muestra la lista que vas armando; puedes quitar elementos allí y usar
+**Vaciar lista** para eliminar todos los elementos de una vez, o
 **Revisar y descargar** para elegir las pistas.
 La cola de búsqueda se mantiene mientras la aplicación está abierta; se borra
 al cerrar youMP3gmr.
@@ -125,17 +139,19 @@ En modo canción individual, **Editar fragmento** abre una vista previa del
 video. Reproduce, pausa o avanza por la línea de tiempo, marca el inicio y el
 final con precisión de milisegundos y pulsa **Descargar fragmento**; para la
 pista completa, selecciona **Usar audio completo**. En este editor también
-puedes cambiar la **Resolución de reproducción**; se mantiene la posición mientras
-se carga el nuevo formato. El reproductor requiere VLC media player de 64 bits
-instalado además de las dependencias Python. Si el sitio entrega el video y el
-audio por separado, la vista previa los combina en VLC.
+puedes controlar el volumen y cambiar la **Resolución de reproducción**; se
+mantiene la posición mientras se carga el nuevo formato. El reproductor requiere
+VLC media player de 64 bits instalado además de las dependencias Python. Si el
+sitio entrega el video y el audio por separado, la vista previa los combina en VLC.
 Si no se detecta VLC, el botón **Instalar VLC** ofrece instalarlo mediante
 winget tras pedir confirmación; la instalación puede solicitar permisos de
 Windows. Si winget no está disponible, ofrece abrir la página oficial de VLC.
 Los mensajes informativos de FFmpeg se ocultan durante las descargas; los
 errores se notifican en la aplicación.
 Al terminar una pista, el botón de carpeta de su fila abre la ubicación del
-archivo descargado.
+archivo descargado. Si falla alguna canción al descargar una playlist, sus URL
+y errores se añaden a `fallas_AAAA-MM-DD.txt` dentro de la carpeta de esa
+playlist.
 Puedes cambiar entre tema oscuro y claro con el botón de la esquina superior
 derecha.
 

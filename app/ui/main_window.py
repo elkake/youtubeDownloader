@@ -8,14 +8,16 @@ from ctypes import wintypes
 from pathlib import Path
 import sys
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 from typing import Any
 
+from app.config.settings import load_settings, save_settings
 from app.config.theme import DEFAULT_THEME
 from app.services.media_provider import YtDlpMediaProvider
 from app.services.video_preview import is_vlc_available
 from app.ui.download_controller import DownloadControllerMixin
 from app.ui.layout import LayoutMixin
+from app.ui.settings_window import SettingsWindow
 from app.ui.theme import ThemeMixin
 
 
@@ -38,7 +40,19 @@ class AudioPlaylistDownloader(ThemeMixin, LayoutMixin, DownloadControllerMixin):
         self.rounded_buttons = []
         music_directory = Path.home() / "Music"
         default_directory = music_directory if music_directory.is_dir() else Path.home()
-        self.output_directory = tk.StringVar(value=str(default_directory))
+        settings, settings_error = load_settings(default_directory)
+        self.output_directory = tk.StringVar(value=str(settings["output_directory"]))
+        self.preview_resolution = tk.StringVar(
+            value=str(settings["preview_resolution"])
+        )
+        self.preview_volume = int(settings["preview_volume"])
+        self.concurrent_downloads = int(settings["concurrent_downloads"])
+        self.music_styles = list(settings["music_styles"])
+        self.search_queue_sidebar_widgets: list[
+            tuple[dict[str, Any], tk.StringVar, ttk.Combobox]
+        ] = []
+        self._settings_error = settings_error
+        self._settings_window: SettingsWindow | None = None
         self.url = tk.StringVar()
         self.download_mode = tk.StringVar(value="single")
         self.status = tk.StringVar(value="Pega un enlace para comenzar.")
@@ -75,6 +89,13 @@ class AudioPlaylistDownloader(ThemeMixin, LayoutMixin, DownloadControllerMixin):
         self._update_clip_editor_button()
         self.download_all_button.configure(state="disabled")
         self.bottom_action_button.configure(state="disabled")
+        if self._settings_error:
+            self._append_log(self._settings_error)
+            messagebox.showwarning(
+                "Preferencias no disponibles",
+                f"{self._settings_error}\nSe usarán los valores predeterminados.",
+                parent=self.root,
+            )
         self.url.trace_add("write", self._on_url_changed)
         self.root.after(100, self._process_messages)
 
@@ -132,6 +153,74 @@ class AudioPlaylistDownloader(ThemeMixin, LayoutMixin, DownloadControllerMixin):
 
     def _minimize_window(self) -> None:
         self.root.iconify()
+
+    def _open_settings(self) -> None:
+        if self._settings_window is not None:
+            try:
+                if self._settings_window.window.winfo_exists():
+                    self._settings_window.window.lift()
+                    return
+            except tk.TclError:
+                self._settings_window = None
+        self._settings_window = SettingsWindow(
+            self.root,
+            self.output_directory.get(),
+            self.preview_resolution.get(),
+            self.preview_volume,
+            self.concurrent_downloads,
+            self.music_styles,
+            self._save_settings,
+        )
+
+    def _save_settings(
+        self,
+        output_directory: str,
+        preview_resolution: str,
+        preview_volume: int,
+        concurrent_downloads: int,
+        music_styles: list[str],
+    ) -> bool:
+        try:
+            save_settings(
+                output_directory,
+                preview_resolution,
+                preview_volume,
+                concurrent_downloads,
+                music_styles,
+            )
+        except (OSError, ValueError) as error:
+            self._append_log(f"No se pudieron guardar los ajustes: {error}")
+            messagebox.showerror(
+                "No se pudieron guardar los ajustes",
+                str(error),
+                parent=self.root,
+            )
+            return False
+        self.output_directory.set(output_directory)
+        self.preview_resolution.set(preview_resolution)
+        self.preview_volume = preview_volume
+        self.concurrent_downloads = concurrent_downloads
+        self.music_styles = music_styles.copy()
+        for widgets in self.item_widgets:
+            item = widgets.get("item")
+            if item is None:
+                continue
+            if item.get("music_style") not in self.music_styles:
+                item["music_style"] = ""
+            style_variable = widgets.get("music_style_value")
+            style_combo = widgets.get("music_style_combo")
+            if style_variable is not None and style_combo is not None:
+                style_combo.configure(values=("Sin estilo", *self.music_styles))
+                style_variable.set(item.get("music_style") or "Sin estilo")
+        for item, style_variable, style_combo in self.search_queue_sidebar_widgets:
+            if item.get("music_style") not in self.music_styles:
+                item["music_style"] = ""
+            style_combo.configure(values=("Sin estilo", *self.music_styles))
+            style_variable.set(item.get("music_style") or "Sin estilo")
+        self._refresh_search_queue_sidebar()
+        self.status.set("Ajustes guardados.")
+        self._append_log("Ajustes guardados.")
+        return True
 
     def _toggle_maximize(self) -> None:
         if self.root.state() == "zoomed":
