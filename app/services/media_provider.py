@@ -10,6 +10,17 @@ from urllib.request import Request, urlopen
 
 import yt_dlp
 
+MAX_SEARCH_RESULTS = 30
+PREVIEW_RESOLUTIONS = (
+    "Automática",
+    "144p",
+    "240p",
+    "360p",
+    "480p",
+    "720p",
+    "1080p",
+)
+
 
 class QueueLogger:
     """Routes yt-dlp messages through the UI's thread-safe event queue."""
@@ -37,10 +48,40 @@ class QueueLogger:
 class YtDlpMediaProvider:
     """Hides yt-dlp options behind a small replaceable media-provider API."""
 
+    def search_videos(
+        self,
+        query: str,
+        messages: queue.Queue[tuple[str, object]],
+        limit: int = MAX_SEARCH_RESULTS,
+    ) -> dict[str, Any] | None:
+        """Search YouTube and return a bounded set of video metadata."""
+        if not query.strip():
+            raise ValueError("Escribe qué video quieres buscar.")
+        if limit < 1:
+            raise ValueError("La cantidad de resultados debe ser positiva.")
+        limit = min(limit, MAX_SEARCH_RESULTS)
+        options = {
+            "skip_download": True,
+            "noplaylist": False,
+            "extract_flat": "in_playlist",
+            "ignoreerrors": False,
+            "socket_timeout": 10,
+            "retries": 1,
+            "quiet": True,
+            "no_warnings": True,
+            "logger": QueueLogger(messages),
+        }
+        with yt_dlp.YoutubeDL(options) as downloader:
+            return downloader.extract_info(
+                f"ytsearch{limit}:{query.strip()}",
+                download=False,
+            )
+
     def resolve_preview_stream(
         self,
         video_url: str,
         messages: queue.Queue[tuple[str, object]],
+        max_height: int | None = None,
     ) -> tuple[str, dict[str, str], str | None, dict[str, str]]:
         """Resolve preview video and, if needed, its separate audio stream."""
         options = {
@@ -62,17 +103,12 @@ class YtDlpMediaProvider:
             and candidate.get("vcodec") not in (None, "none")
             and candidate.get("acodec") not in (None, "none")
         ]
-        if combined_formats:
-            selected_format = max(
-                combined_formats,
-                key=lambda candidate: (
-                    candidate.get("protocol") in {"https", "http"},
-                    candidate.get("height") or 0,
-                    candidate.get("tbr") or 0,
-                ),
-            )
+        selected_format = self._select_preview_format(
+            combined_formats, max_height
+        )
+        if selected_format:
             return (
-                selected_format["url"],
+            selected_format["url"],
                 selected_format.get("http_headers")
                 or info.get("http_headers")
                 or {},
@@ -81,21 +117,28 @@ class YtDlpMediaProvider:
             )
 
         stream = info.get("url")
-        if stream and info.get("vcodec") not in (None, "none") and info.get(
-            "acodec"
-        ) not in (None, "none"):
+        if (
+            stream
+            and info.get("vcodec") not in (None, "none")
+            and info.get("acodec") not in (None, "none")
+            and (
+                max_height is None
+                or not info.get("height")
+                or info.get("height") <= max_height
+            )
+        ):
             return stream, info.get("http_headers") or {}, None, {}
 
         requested_formats = info.get("requested_formats") or []
-        selected_format = next(
-            (
+        selected_format = self._select_preview_format(
+            [
                 candidate
                 for candidate in requested_formats
                 if candidate.get("url")
                 and candidate.get("vcodec") not in (None, "none")
                 and candidate.get("acodec") not in (None, "none")
-            ),
-            None,
+            ],
+            max_height,
         )
         if selected_format:
             return (
@@ -117,14 +160,12 @@ class YtDlpMediaProvider:
             if candidate.get("url") and candidate.get("acodec") not in (None, "none")
         ]
         if video_formats and audio_formats:
-            video_format = max(
-                video_formats,
-                key=lambda candidate: (
-                    candidate.get("protocol") in {"https", "http"},
-                    candidate.get("height") or 0,
-                    candidate.get("tbr") or 0,
-                ),
-            )
+            video_format = self._select_preview_format(video_formats, max_height)
+            if video_format is None:
+                raise ValueError(
+                    "yt-dlp no encontró un formato de video compatible para "
+                    "la resolución seleccionada."
+                )
             audio_format = max(
                 audio_formats,
                 key=lambda candidate: (
@@ -144,6 +185,46 @@ class YtDlpMediaProvider:
             "yt-dlp no encontró formatos de video y audio compatibles para la "
             "vista previa. Actualiza yt-dlp y comprueba que el video se pueda "
             "reproducir desde el navegador."
+        )
+
+    @staticmethod
+    def _select_preview_format(
+        formats: list[dict[str, Any]],
+        max_height: int | None,
+    ) -> dict[str, Any] | None:
+        if not formats:
+            return None
+        candidates = formats
+        if max_height is not None:
+            known_heights = [
+                candidate
+                for candidate in formats
+                if candidate.get("height")
+            ]
+            within_limit = [
+                candidate
+                for candidate in known_heights
+                if candidate["height"] <= max_height
+            ]
+            if known_heights and not within_limit:
+                return None
+            candidates = within_limit or formats
+        if max_height is not None:
+            return max(
+                candidates,
+                key=lambda candidate: (
+                    candidate.get("height") or 0,
+                    candidate.get("protocol") in {"https", "http"},
+                    candidate.get("tbr") or 0,
+                ),
+            )
+        return max(
+            candidates,
+            key=lambda candidate: (
+                candidate.get("protocol") in {"https", "http"},
+                candidate.get("height") or 0,
+                candidate.get("tbr") or 0,
+            ),
         )
 
     def extract_metadata(
@@ -175,13 +256,20 @@ class YtDlpMediaProvider:
             thumbnail_url = best_thumbnail.get("url") or thumbnail_url
         item_url = info.get("webpage_url") or info.get("original_url")
         candidate_url = info.get("url")
-        if not item_url and candidate_url:
-            if urlsplit(candidate_url).scheme in {"http", "https"}:
+        extractor = (info.get("ie_key") or info.get("extractor_key") or "").lower()
+        video_id = info.get("id")
+        if not thumbnail_url and extractor == "youtube" and video_id:
+            thumbnail_url = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+        if not item_url:
+            if candidate_url and urlsplit(candidate_url).scheme in {"http", "https"}:
                 item_url = candidate_url
-            elif (info.get("ie_key") or info.get("extractor_key", "")).lower() == "youtube":
-                video_id = info.get("id") or candidate_url
-                item_url = f"https://www.youtube.com/watch?{urlencode({'v': video_id})}"
-            else:
+            elif extractor == "youtube":
+                video_id = video_id or candidate_url
+                if video_id:
+                    item_url = (
+                        f"https://www.youtube.com/watch?{urlencode({'v': video_id})}"
+                    )
+            elif candidate_url:
                 item_url = candidate_url
         return {
             "title": info.get("title") or "Título desconocido",

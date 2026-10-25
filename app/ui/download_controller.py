@@ -99,8 +99,270 @@ class DownloadControllerMixin:
             daemon=True,
         ).start()
 
+    def _open_search_preview(self, index: int) -> None:
+        if (
+            self.download_mode.get() != "search"
+            or self._search_view != "results"
+            or not 0 <= index < len(self.search_results)
+        ):
+            return
+        if self.search_preview_window is not None:
+            try:
+                if self.search_preview_window.window.winfo_exists():
+                    self.search_preview_window.window.lift()
+                    return
+            except tk.TclError:
+                self.search_preview_window = None
+        if self._search_preview_loading:
+            return
+        if not self._vlc_available:
+            messagebox.showerror(
+                "Vista previa no disponible",
+                "Para reproducir videos instala VLC media player de 64 bits "
+                "con el botón «Instalar VLC» del modo Canción.",
+            )
+            return
+        item = self.search_results[index]
+        self._search_preview_generation += 1
+        generation = self._search_preview_generation
+        self._search_preview_loading = True
+        self.item_widgets[index]["play_button"].configure(state="disabled")
+        self.status.set(f"Preparando vista previa: {item['title']}")
+        threading.Thread(
+            target=self._load_search_preview_stream,
+            args=(item["url"], item["title"], item.get("duration"), index, generation),
+            daemon=True,
+        ).start()
+
+    def _load_search_preview_stream(
+        self,
+        video_url: str,
+        title: str,
+        duration: float | None,
+        index: int,
+        generation: int,
+    ) -> None:
+        try:
+            (
+                stream_url,
+                http_headers,
+                audio_stream_url,
+                audio_http_headers,
+            ) = self.media_provider.resolve_preview_stream(video_url, self.messages)
+            self.messages.put(
+                (
+                    "search_preview_ready",
+                    (
+                        generation,
+                        index,
+                        title,
+                        duration,
+                        video_url,
+                        stream_url,
+                        http_headers,
+                        audio_stream_url,
+                        audio_http_headers,
+                    ),
+                )
+            )
+        except Exception as error:
+            self.messages.put(
+                ("search_preview_failed", (generation, index, str(error)))
+            )
+
     def _wait_for_vlc_install(self, process: subprocess.Popen[bytes]) -> None:
         self.messages.put(("vlc_install_finished", process.wait()))
+
+    def _on_mode_changed(self) -> None:
+        if self.downloading:
+            return
+        self._search_view = "results"
+        self._search_query = ""
+        self._search_preview_generation += 1
+        self._search_preview_loading = False
+        self._reset_metadata()
+        if self.download_mode.get() == "search":
+            self.paste_button.grid_remove()
+            self.search_page.place(
+                x=0,
+                y=38,
+                relwidth=1,
+                relheight=1,
+                height=-38,
+            )
+            self.search_page.lift()
+            self.search_results_heading.configure(
+                text="Busca canciones, artistas o videos"
+            )
+            self.status.set("Escribe qué quieres escuchar y pulsa «Buscar videos».")
+        else:
+            self.paste_button.grid()
+            self.search_page.place_forget()
+        self.analyze_button.configure(
+            text="Buscar videos" if self.download_mode.get() == "search"
+            else "Analizar playlist"
+        )
+        self._update_search_queue_button()
+
+    def _select_download_mode(self, mode: str) -> None:
+        if self.downloading:
+            return
+        self.download_mode.set(mode)
+        self._on_mode_changed()
+
+    def _start_search_from_page(self) -> None:
+        query = self.search_query.get().strip()
+        if not query:
+            self.search_entry.focus_set()
+            messagebox.showerror(
+                "Falta la búsqueda",
+                "Escribe una canción, artista o video para buscar.",
+            )
+            return
+        self._start_youtube_search(query)
+
+    def _update_search_queue_button(self) -> None:
+        if self.download_mode.get() != "search":
+            self.search_queue_button.pack_forget()
+            return
+        text = (
+            f"Volver a resultados ({len(self.search_results)})"
+            if self._search_view == "queue"
+            else f"Ver cola ({len(self.search_queue)})"
+        )
+        self.search_queue_button.configure(
+            text=text,
+            state="disabled" if self.downloading or self._loading else "normal",
+        )
+        self.search_queue_page_button.configure(
+            text=f"Ver cola ({len(self.search_queue)})",
+            state="disabled" if self.downloading or self._loading else "normal",
+        )
+        if hasattr(self, "search_queue_download_button"):
+            enabled = bool(self.search_queue) and not self.downloading and not self._loading
+            self.search_queue_download_button.configure(
+                state="normal" if enabled else "disabled"
+            )
+        self.search_queue_button.pack(fill="x", pady=(0, 5), ipady=2)
+
+    def _toggle_search_queue_view(self) -> None:
+        if self.download_mode.get() != "search" or self.downloading:
+            return
+        if self._search_view == "results":
+            self.search_results = self.items
+            self._search_view = "queue"
+            self.search_page.place_forget()
+            self._show_items(self.search_queue)
+            self.metadata_ready = bool(self.search_queue)
+            self.playlist_badge.configure(text="COLA DE DESCARGA")
+            self.playlist_title_label.configure(text="Videos añadidos")
+            self.playlist_stats.configure(
+                text=f"{len(self.search_queue)} videos en la cola"
+            )
+            self.status.set(
+                "Selecciona videos y pulsa descargar cuando quieras."
+                if self.search_queue
+                else "La cola está vacía. Busca videos y añádelos."
+            )
+        else:
+            self._search_view = "results"
+            self._show_items(self.search_results)
+            self.search_page.place(
+                x=0,
+                y=38,
+                relwidth=1,
+                relheight=1,
+                height=-38,
+            )
+            self.search_page.lift()
+            self.metadata_ready = bool(self.search_results)
+            self.search_results_heading.configure(
+                text=f"Resultados para «{self._search_query}»"
+            )
+            self.playlist_badge.configure(text="RESULTADOS DE BÚSQUEDA")
+            self.playlist_title_label.configure(
+                text=f"Resultados: {self._search_query}"
+            )
+            self.playlist_stats.configure(
+                text=f"{len(self.search_results)} videos encontrados"
+            )
+            self.status.set("Añade los videos que quieras a la cola de descarga.")
+        self._set_controls_enabled(True)
+        if self._search_view == "results":
+            self.select_all_checkbox.configure(state="disabled")
+            for widgets in self.item_widgets:
+                widgets["checkbox"].configure(state="disabled")
+            self.download_all_button.configure(state="disabled")
+            self.bottom_action_button.configure(state="disabled")
+        elif not self.search_queue:
+            self.download_all_button.configure(state="disabled")
+            self.bottom_action_button.configure(state="disabled")
+        self._update_selection_count()
+        if self._search_view == "results":
+            self._set_action_text("Añade videos a la cola para descargarlos")
+        self._update_search_queue_button()
+
+    def _add_search_result(self, index: int) -> None:
+        if self._search_view != "results" or not 0 <= index < len(self.items):
+            return
+        item = self.items[index]
+        video_url = item.get("url")
+        if not video_url:
+            messagebox.showerror(
+                "Video no disponible",
+                "No se encontró el enlace para añadir este resultado.",
+            )
+            return
+        if any(queued.get("url") == video_url for queued in self.search_queue):
+            return
+        self.search_queue.append(item)
+        self.item_widgets[index]["add_button"].configure(
+            state="disabled"
+        )
+        self._refresh_search_queue_sidebar()
+        self._update_search_queue_button()
+        self.status.set(f"Agregado a la cola: {item['title']}")
+        self._append_log(f"Agregado a la cola: {item['title']}")
+
+    def _remove_search_queue_item(self, index: int) -> None:
+        if self._search_view != "queue" or not 0 <= index < len(self.search_queue):
+            return
+        removed = self.search_queue.pop(index)
+        self._show_items(self.search_queue)
+        self._refresh_search_queue_sidebar()
+        self.metadata_ready = bool(self.search_queue)
+        self.playlist_stats.configure(
+            text=f"{len(self.search_queue)} videos en la cola"
+        )
+        self.status.set(f"Quitado de la cola: {removed['title']}")
+        if not self.search_queue:
+            self.download_all_button.configure(state="disabled")
+            self.bottom_action_button.configure(state="disabled")
+        self._update_search_queue_button()
+
+    def _remove_search_queue_sidebar_item(self, index: int) -> None:
+        if self.download_mode.get() != "search" or not 0 <= index < len(self.search_queue):
+            return
+        removed = self.search_queue.pop(index)
+        self._refresh_search_queue_sidebar()
+        self._update_search_queue_button()
+        self.status.set(f"Quitado de la lista: {removed['title']}")
+        if self._search_view == "queue":
+            self._show_items(self.search_queue)
+            self.metadata_ready = bool(self.search_queue)
+            self.playlist_stats.configure(
+                text=f"{len(self.search_queue)} videos en la cola"
+            )
+            if not self.search_queue:
+                self.download_all_button.configure(state="disabled")
+                self.bottom_action_button.configure(state="disabled")
+        else:
+            for item_index, item in enumerate(self.search_results):
+                if item.get("url") == removed.get("url"):
+                    self.item_widgets[item_index]["add_button"].configure(
+                        state="normal",
+                    )
+                    break
 
     @staticmethod
     def _format_time(seconds: float) -> str:
@@ -171,6 +433,7 @@ class DownloadControllerMixin:
                     (
                         title,
                         duration,
+                        video_url,
                         stream_url,
                         http_headers,
                         audio_stream_url,
@@ -181,7 +444,69 @@ class DownloadControllerMixin:
         except Exception as error:
             self.messages.put(("preview_failed", str(error)))
 
+    def _request_preview_quality(
+        self,
+        target_window: Any,
+        resolution: str,
+    ) -> None:
+        if resolution == "Automática":
+            max_height = None
+        else:
+            try:
+                max_height = int(resolution.removesuffix("p"))
+            except ValueError as error:
+                raise ValueError(f"Resolución no válida: {resolution}") from error
+        threading.Thread(
+            target=self._load_preview_quality_stream,
+            args=(
+                target_window,
+                target_window.video_url,
+                resolution,
+                max_height,
+            ),
+            daemon=True,
+        ).start()
+
+    def _load_preview_quality_stream(
+        self,
+        target_window: Any,
+        video_url: str,
+        resolution: str,
+        max_height: int | None,
+    ) -> None:
+        try:
+            (
+                stream_url,
+                http_headers,
+                audio_stream_url,
+                audio_http_headers,
+            ) = self.media_provider.resolve_preview_stream(
+                video_url,
+                self.messages,
+                max_height,
+            )
+            self.messages.put(
+                (
+                    "preview_quality_ready",
+                    (
+                        target_window,
+                        resolution,
+                        stream_url,
+                        http_headers,
+                        audio_stream_url,
+                        audio_http_headers,
+                    ),
+                )
+            )
+        except Exception as error:
+            self.messages.put(
+                ("preview_quality_failed", (target_window, str(error)))
+            )
+
     def _start_download_all(self) -> None:
+        if self.download_mode.get() == "search" and self._search_view != "queue":
+            self._start_download()
+            return
         for widgets in self.item_widgets:
             widgets["selected"].set(True)
         self._update_selection_count()
@@ -190,6 +515,9 @@ class DownloadControllerMixin:
 
     def _start_metadata_lookup(self) -> None:
         url = self.url.get().strip()
+        if self.download_mode.get() == "search":
+            self._start_youtube_search(url)
+            return
         output_directory = Path(self.output_directory.get()).expanduser()
         if not url:
             messagebox.showerror("Falta el enlace", "Pega un enlace de video o playlist.")
@@ -258,6 +586,70 @@ class DownloadControllerMixin:
             daemon=True,
         ).start()
 
+    def _start_youtube_search(self, query: str) -> None:
+        if not query:
+            messagebox.showerror("Falta la búsqueda", "Escribe qué video quieres buscar.")
+            return
+        self._search_generation += 1
+        generation = self._search_generation
+        self._search_view = "results"
+        self._reset_metadata()
+        self._search_query = query
+        self._set_loading(True)
+        self.metadata_ready = False
+        self._set_controls_enabled(False)
+        self.analyze_button.configure(text="Buscando...")
+        self.search_results_heading.configure(text=f"Buscando «{query}»...")
+        self._update_search_queue_button()
+        self.status.set("Buscando videos en YouTube...")
+        self._append_log(f"Buscando en YouTube: {query}")
+        threading.Thread(
+            target=self._load_search_results,
+            args=(query, generation),
+            daemon=True,
+        ).start()
+
+    def _load_search_results(self, query: str, generation: int) -> None:
+        try:
+            info = self.media_provider.search_videos(
+                query,
+                self.messages,
+                limit=30,
+            )
+            entries = (info or {}).get("entries") or []
+            items = [
+                self.media_provider.normalize_metadata(entry)
+                for entry in entries
+                if entry
+            ]
+            if not items:
+                self.messages.put(("search_failed", (generation, "No se encontraron videos. Prueba con otros términos.")))
+                return
+            self.messages.put(("search_results", (items, query, generation)))
+            self.messages.put(("metadata_complete", ("search", generation)))
+            with ThreadPoolExecutor(max_workers=6) as executor:
+                futures = {
+                    executor.submit(
+                        self.media_provider.fetch_thumbnail, item.get("thumbnail")
+                    ): index
+                    for index, item in enumerate(items)
+                    if item.get("thumbnail")
+                }
+                for future in as_completed(futures):
+                    index = futures[future]
+                    try:
+                        image_data = future.result()
+                        if image_data:
+                            self.messages.put(
+                                ("search_thumbnail", (generation, index, image_data))
+                            )
+                    except (OSError, URLError, ValueError) as error:
+                        self.messages.put(
+                            ("log", f"No se pudo cargar una portada: {error}")
+                        )
+        except Exception as error:
+            self.messages.put(("search_failed", (generation, str(error))))
+
     def _load_metadata(self, url: str, single_video: bool) -> None:
         """Fetch metadata off the UI thread and publish results as queue events."""
         try:
@@ -299,6 +691,15 @@ class DownloadControllerMixin:
             self.messages.put(("metadata_failed", str(error)))
 
     def _start_download(self) -> None:
+        if (
+            self.download_mode.get() == "search"
+            and self._search_view != "queue"
+        ):
+            messagebox.showinfo(
+                "Abre la cola de descarga",
+                "Primero añade videos y pulsa «Ver cola» para descargarlos.",
+            )
+            return
         selected_indices = [
             index
             for index, widgets in enumerate(self.item_widgets)
@@ -335,7 +736,7 @@ class DownloadControllerMixin:
             target=self._download_items,
             args=(
                 output_directory,
-                self.download_mode.get() == "single",
+                self.download_mode.get() != "playlist",
                 selected_indices,
                 self.embed_metadata.get(),
                 self.clip_section if self.download_mode.get() == "single" else None,
@@ -429,6 +830,7 @@ class DownloadControllerMixin:
                     (
                         title,
                         duration,
+                        video_url,
                         stream_url,
                         http_headers,
                         audio_stream_url,
@@ -448,6 +850,8 @@ class DownloadControllerMixin:
                             audio_http_headers,
                             self.palette,
                             self._set_clip_section,
+                            video_url,
+                            self._request_preview_quality,
                         )
                     except RuntimeError as error:
                         self.clip_editor_window = None
@@ -461,6 +865,85 @@ class DownloadControllerMixin:
                     messagebox.showerror(
                         "No se pudo abrir el video",
                         f"No se pudo preparar la vista previa.\n\n{value}",
+                    )
+                elif event == "preview_quality_ready":
+                    (
+                        target_window,
+                        resolution,
+                        stream_url,
+                        http_headers,
+                        audio_stream_url,
+                        audio_http_headers,
+                    ) = value
+                    target_window.set_resolution_stream(
+                        resolution,
+                        stream_url,
+                        http_headers,
+                        audio_stream_url,
+                        audio_http_headers,
+                    )
+                elif event == "preview_quality_failed":
+                    target_window, error = value
+                    target_window.resolution_change_failed(str(error))
+                elif event == "search_preview_ready":
+                    (
+                        generation,
+                        index,
+                        title,
+                        duration,
+                        video_url,
+                        stream_url,
+                        http_headers,
+                        audio_stream_url,
+                        audio_http_headers,
+                    ) = value
+                    if generation != self._search_preview_generation:
+                        continue
+                    self._search_preview_loading = False
+                    try:
+                        from app.ui.clip_editor import SearchPreviewWindow
+
+                        self.search_preview_window = SearchPreviewWindow(
+                            self.root,
+                            title,
+                            duration,
+                            stream_url,
+                            http_headers,
+                            audio_stream_url,
+                            audio_http_headers,
+                            self.palette,
+                            video_url,
+                            self._request_preview_quality,
+                        )
+                    except RuntimeError as error:
+                        self.search_preview_window = None
+                        self._append_log(
+                            f"No se pudo abrir la vista previa: {error}"
+                        )
+                        messagebox.showerror(
+                            "Vista previa no disponible",
+                            str(error),
+                        )
+                    finally:
+                        if index < len(self.item_widgets):
+                            self.item_widgets[index]["play_button"].configure(
+                                state="normal"
+                            )
+                elif event == "search_preview_failed":
+                    generation, index, error = value
+                    if generation != self._search_preview_generation:
+                        continue
+                    self._search_preview_loading = False
+                    if index < len(self.item_widgets):
+                        self.item_widgets[index]["play_button"].configure(
+                            state="normal"
+                        )
+                    self._append_log(
+                        f"No se pudo preparar la vista previa: {error}"
+                    )
+                    messagebox.showerror(
+                        "No se pudo abrir el video",
+                        f"No se pudo preparar la vista previa.\n\n{error}",
                     )
                 elif event == "vlc_install_finished":
                     self._vlc_installing = False
@@ -504,11 +987,59 @@ class DownloadControllerMixin:
                     self.status.set(
                         f"{len(items)} video(s) encontrados. Cargando portadas..."
                     )
+                elif event == "search_results":
+                    items, query, generation = value
+                    if generation != self._search_generation:
+                        continue
+                    self.search_results = items
+                    self.items = items
+                    self._search_query = query
+                    self._search_view = "results"
+                    self._show_items(items)
+                    self.search_page.lift()
+                    self.search_results_heading.configure(
+                        text=f"Resultados para «{query}» · {len(items)} videos"
+                    )
+                    self.playlist_badge.configure(text="RESULTADOS DE BÚSQUEDA")
+                    self.playlist_title_label.configure(text=f"Resultados: {query}")
+                    self.playlist_stats.configure(
+                        text=f"{len(items)} videos encontrados · Máximo 30 resultados"
+                    )
+                    self._set_action_text("Añade videos a la cola para descargarlos")
+                    self.status.set(
+                        f"{len(items)} resultados. Pulsa + para añadir o ▶ para reproducir."
+                    )
                 elif event == "metadata_complete":
+                    if (
+                        isinstance(value, tuple)
+                        and len(value) == 2
+                        and value[0] == "search"
+                        and value[1] != self._search_generation
+                    ):
+                        continue
                     self.metadata_ready = True
                     self._set_loading(False)
                     self._set_controls_enabled(True)
-                    self.analyze_button.configure(text="Analizar playlist")
+                    self.analyze_button.configure(
+                        text="Buscar videos"
+                        if self.download_mode.get() == "search"
+                        else "Analizar playlist"
+                    )
+                    if (
+                        self.download_mode.get() == "search"
+                        and self._search_view == "results"
+                    ):
+                        self.select_all_checkbox.configure(state="disabled")
+                        for widgets in self.item_widgets:
+                            widgets["checkbox"].configure(state="disabled")
+                        self.download_all_button.configure(state="disabled")
+                        self.bottom_action_button.configure(state="disabled")
+                        self.status.set(
+                            f"{len(self.search_results)} resultados. Pulsa + para "
+                            "añadir o ▶ para reproducir."
+                        )
+                        self._update_search_queue_button()
+                        continue
                     self._set_action_text(
                         f"Descargar todo en MP3 ({len(self.items)} "
                         f"{'pista' if len(self.items) == 1 else 'pistas'})"
@@ -523,15 +1054,47 @@ class DownloadControllerMixin:
                     self._set_thumbnail(index, image_data)
                     if index == 0:
                         self._set_playlist_cover(image_data)
+                elif event == "search_thumbnail":
+                    generation, index, image_data = value
+                    if generation == self._search_generation:
+                        self._set_thumbnail(index, image_data)
+                elif event == "search_failed":
+                    generation, error = value
+                    if generation != self._search_generation:
+                        continue
+                    self._set_loading(False)
+                    self._set_controls_enabled(True)
+                    self.analyze_button.configure(text="Buscar videos")
+                    self.download_all_button.configure(state="disabled")
+                    self.bottom_action_button.configure(state="disabled")
+                    self.search_results_heading.configure(
+                        text="No se encontraron resultados"
+                        if "No se encontraron videos" in error
+                        else "No se pudo completar la búsqueda"
+                    )
+                    self.status.set("No se pudo completar la búsqueda.")
+                    self._append_log(f"Error de búsqueda: {error}")
+                    messagebox.showerror(
+                        "Error al buscar en YouTube",
+                        error,
+                    )
                 elif event == "metadata_failed":
                     self._set_loading(False)
                     self._set_controls_enabled(True)
-                    self.analyze_button.configure(text="Analizar playlist")
+                    self.analyze_button.configure(
+                        text="Buscar videos"
+                        if self.download_mode.get() == "search"
+                        else "Analizar playlist"
+                    )
                     self.download_all_button.configure(state="disabled")
                     self.bottom_action_button.configure(state="disabled")
                     self._set_action_text("Descargar todo en MP3")
                     self.status.set("No se pudo obtener la información.")
                     self._append_log(f"Error de metadatos: {value}")
+                    if self.download_mode.get() == "search":
+                        self.search_results_heading.configure(
+                            text="No se pudo completar la búsqueda"
+                        )
                     messagebox.showerror(
                         "Error al obtener información",
                         f"No se pudieron cargar los metadatos.\n\n{value}",

@@ -1,7 +1,8 @@
 # youMP3gmr
 
 Aplicación de escritorio en Python con Tkinter y yt-dlp. Permite analizar un
-video o playlist, revisar su cola de canciones y descargar el audio como MP3.
+video o playlist, buscar videos en YouTube, añadirlos a una cola durante la
+sesión y descargar el audio como MP3.
 La ventana usa el icono `youMP3gmr.ico`, muestra el nombre de la aplicación
 en su cabecera y ofrece controles integrados para minimizar,
 maximizar/restaurar y cerrar.
@@ -63,6 +64,37 @@ GitHub. Después, abre PowerShell en la carpeta del proyecto y ejecuta:
 py main.py
 ```
 
+## Crear un ejecutable de Windows
+
+Puedes empaquetar la aplicación con PyInstaller. El ejecutable incluye Python
+y las dependencias del proyecto, pero **no incluye FFmpeg**. Cada computadora
+que use el programa para convertir audio debe tener FFmpeg instalado y
+disponible en el `PATH` de Windows. VLC sigue siendo opcional y solo se necesita
+para la vista previa y el editor de fragmentos.
+
+Desde PowerShell, abre la carpeta del proyecto y ejecuta los comandos siguientes.
+Usar el mismo entorno virtual para instalar las dependencias y crear el ejecutable
+evita que PyInstaller omita paquetes como Pillow:
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install pyinstaller
+.\.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean --onefile --windowed --name youMP3gmr --icon .\youMP3gmr.ico --add-data ".\youMP3gmr.ico;." --collect-all yt_dlp .\main.py
+```
+
+El último comando crea `dist\youMP3gmr.exe`: `--onefile` genera un solo
+ejecutable, `--windowed` evita abrir una consola junto con la interfaz,
+`--icon` y `--add-data` incluyen el icono de la aplicación, y
+`--collect-all yt_dlp` incorpora los archivos necesarios de yt-dlp. Las opciones
+`--clean` y `--noconfirm` limpian los archivos temporales de compilaciones
+anteriores y evitan preguntas de confirmación.
+
+Al finalizar, el ejecutable estará en `dist\youMP3gmr.exe`. Puedes copiar ese
+archivo a otra computadora Windows. Antes de compartirlo, pruébalo en un equipo
+que no tenga el entorno de desarrollo del proyecto para comprobar que inicia y
+que detecta FFmpeg.
+
 **Opcional: vista previa y editor de fragmentos.** Para reproducir el video
 dentro de youMP3gmr se necesita **VLC media player de 64 bits**, además del
 paquete python-vlc que ya se instala desde `requirements.txt`. Si VLC falta, el
@@ -77,12 +109,26 @@ el MP3, siempre que el medio disponga de miniatura. Desmárcala si prefieres no
 incrustarlos. La portada incrustada se ajusta a 300 × 300 píxeles. Selecciona
 las canciones que quieres procesar y pulsa
 **Descargar selección** o **Descargar todo en MP3**.
+En modo **Buscar en YouTube**, se abre una pantalla de búsqueda independiente
+de los modos canción y playlist. Escribe canciones, artistas o videos para ver
+hasta 30 resultados en una cuadrícula de tres columnas con miniaturas, título,
+canal y duración. Pulsa **▶** para abrir una vista previa con reproducción,
+pausa, barra de avance y cierre; requiere VLC de 64 bits. El selector
+**Resolución de reproducción** permite elegir Automática o hasta 144p, 240p, 360p,
+480p, 720p o 1080p. Puedes desplazarte por los resultados y la lista lateral
+con la rueda del mouse. Pulsa **+** para agregar un video. A la derecha se
+muestra la lista que vas armando; puedes quitar elementos allí y usar
+**Revisar y descargar** para elegir las pistas.
+La cola de búsqueda se mantiene mientras la aplicación está abierta; se borra
+al cerrar youMP3gmr.
 En modo canción individual, **Editar fragmento** abre una vista previa del
 video. Reproduce, pausa o avanza por la línea de tiempo, marca el inicio y el
 final con precisión de milisegundos y pulsa **Descargar fragmento**; para la
-pista completa, selecciona **Usar audio completo**. El reproductor requiere VLC
-media player de 64 bits instalado además de las dependencias Python. Si el sitio
-entrega el video y el audio por separado, la vista previa los combina en VLC.
+pista completa, selecciona **Usar audio completo**. En este editor también
+puedes cambiar la **Resolución de reproducción**; se mantiene la posición mientras
+se carga el nuevo formato. El reproductor requiere VLC media player de 64 bits
+instalado además de las dependencias Python. Si el sitio entrega el video y el
+audio por separado, la vista previa los combina en VLC.
 Si no se detecta VLC, el botón **Instalar VLC** ofrece instalarlo mediante
 winget tras pedir confirmación; la instalación puede solicitar permisos de
 Windows. Si winget no está disponible, ofrece abrir la página oficial de VLC.

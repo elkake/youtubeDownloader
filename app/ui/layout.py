@@ -146,7 +146,7 @@ class LayoutMixin:
             text="Canción individual",
             variable=self.download_mode,
             value="single",
-            command=self._reset_metadata,
+            command=self._on_mode_changed,
         )
         self.single_radio.pack(side="left", padx=(0, 12))
         self.playlist_radio = ttk.Radiobutton(
@@ -154,9 +154,17 @@ class LayoutMixin:
             text="Playlist completa",
             variable=self.download_mode,
             value="playlist",
-            command=self._reset_metadata,
+            command=self._on_mode_changed,
         )
         self.playlist_radio.pack(side="left")
+        self.search_radio = ttk.Radiobutton(
+            mode_frame,
+            text="Buscar en YouTube",
+            variable=self.download_mode,
+            value="search",
+            command=self._on_mode_changed,
+        )
+        self.search_radio.pack(side="left", padx=(12, 0))
 
         self.summary_card = ttk.Frame(frame, style="Panel.TFrame", padding=12)
         self.summary_card.grid(row=2, column=0, sticky="ew", pady=(0, 8))
@@ -209,6 +217,14 @@ class LayoutMixin:
             background_role="surface",
         )
         self.clip_editor_button.pack(fill="x", pady=(0, 5), ipady=2)
+        self.search_queue_button = self._create_button(
+            summary_actions,
+            text="Ver cola (0)",
+            command=self._toggle_search_queue_view,
+            background_role="surface",
+        )
+        self.search_queue_button.pack(fill="x", pady=(0, 5), ipady=2)
+        self.search_queue_button.pack_forget()
         self.pause_all_button = self._create_button(
             summary_actions,
             text="Ⅱ  Pausar todo",
@@ -290,7 +306,7 @@ class LayoutMixin:
         headings.grid(row=0, column=0, sticky="ew")
         for column, weight, minsize in (
             (0, 0, 36), (1, 0, 42), (2, 3, 304), (3, 0, 70),
-            (4, 0, 80), (5, 3, 180), (6, 0, 120), (7, 0, 70),
+            (4, 0, 80), (5, 3, 180), (6, 0, 120), (7, 0, 90),
         ):
             headings.columnconfigure(column, weight=weight, minsize=minsize)
         self.select_all = tk.BooleanVar(value=True)
@@ -335,7 +351,6 @@ class LayoutMixin:
         self.items_frame.bind("<Configure>", self._update_scroll_region)
         self.canvas.bind("<Configure>", self._resize_items_frame)
         self.canvas.bind("<Configure>", self._position_empty_state, add="+")
-        self.canvas.bind_all("<MouseWheel>", self._scroll_items)
         self.empty_state = self.canvas.create_text(
             0,
             0,
@@ -405,6 +420,240 @@ class LayoutMixin:
         )
         self.bottom_action_button.grid(row=0, column=6, rowspan=2, padx=(8, 0), ipady=2)
 
+        self.search_page = ttk.Frame(
+            self.root,
+            style="App.TFrame",
+            padding=(18, 14),
+        )
+        self.search_page.columnconfigure(0, weight=3, minsize=600)
+        self.search_page.columnconfigure(1, weight=1, minsize=205)
+        self.search_page.rowconfigure(3, weight=1)
+        self.search_page.place(
+            x=0,
+            y=38,
+            relwidth=1,
+            relheight=1,
+            height=-38,
+        )
+        self.search_page.place_forget()
+
+        search_header = ttk.Frame(self.search_page, style="App.TFrame")
+        search_header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 14))
+        search_header.columnconfigure(1, weight=1)
+        ttk.Label(
+            search_header,
+            text="YouTube",
+            style="SearchPageTitle.TLabel",
+            font=("Segoe UI", 20, "bold"),
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            search_header,
+            text="BUSCADOR DE MÚSICA",
+            style="Muted.TLabel",
+            font=("Segoe UI", 8, "bold"),
+        ).grid(row=1, column=0, sticky="w", pady=(3, 0))
+        search_navigation = ttk.Frame(search_header, style="App.TFrame")
+        search_navigation.grid(row=0, column=2, rowspan=2, sticky="e")
+        self.search_single_button = self._create_button(
+            search_navigation,
+            text="Canción",
+            command=lambda: self._select_download_mode("single"),
+        )
+        self.search_single_button.pack(side="left", padx=(0, 6))
+        self.search_playlist_button = self._create_button(
+            search_navigation,
+            text="Playlist",
+            command=lambda: self._select_download_mode("playlist"),
+        )
+        self.search_playlist_button.pack(side="left", padx=(0, 10))
+        self.search_queue_page_button = self._create_button(
+            search_navigation,
+            text="Ver cola (0)",
+            command=self._toggle_search_queue_view,
+            variant="primary",
+        )
+        self.search_queue_page_button.pack(side="left")
+
+        search_bar = ttk.Frame(self.search_page, style="Panel.TFrame", padding=8)
+        search_bar.grid(
+            row=1, column=0, columnspan=2, sticky="ew", pady=(0, 10)
+        )
+        search_bar.columnconfigure(0, weight=1)
+        self.search_entry = RoundedEntry(
+            search_bar,
+            textvariable=self.search_query,
+            palette=self.palette,
+        )
+        self.search_entry.grid(row=0, column=0, sticky="ew", padx=(2, 8))
+        self.search_entry.entry.bind(
+            "<Return>", lambda _event: self._start_search_from_page()
+        )
+        self.search_page_button = self._create_button(
+            search_bar,
+            text="Buscar",
+            command=self._start_search_from_page,
+            variant="primary",
+            background_role="surface",
+        )
+        self.search_page_button.grid(row=0, column=1, ipady=3)
+
+        self.search_results_heading = ttk.Label(
+            self.search_page,
+            text="Busca canciones, artistas o videos",
+            style="SearchPageTitle.TLabel",
+            font=("Segoe UI", 13, "bold"),
+        )
+        self.search_results_heading.grid(row=2, column=0, sticky="w", pady=(4, 10))
+        search_results_panel = ttk.Frame(
+            self.search_page,
+            style="Panel.TFrame",
+        )
+        search_results_panel.grid(row=3, column=0, sticky="nsew")
+        search_results_panel.columnconfigure(0, weight=1)
+        search_results_panel.rowconfigure(0, weight=1)
+        self.search_canvas = tk.Canvas(
+            search_results_panel,
+            background=self.palette["surface"],
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        self.search_scrollbar = SubtleScrollbar(
+            search_results_panel,
+            command=self.search_canvas.yview,
+            palette=self.palette,
+        )
+        self.search_canvas.configure(yscrollcommand=self.search_scrollbar.set)
+        self.search_canvas.grid(row=0, column=0, sticky="nsew", padx=(8, 0), pady=8)
+        self.search_scrollbar.grid(row=0, column=1, sticky="ns", padx=(2, 8), pady=8)
+        self.search_results_frame = ttk.Frame(
+            self.search_canvas,
+            style="Panel.TFrame",
+        )
+        self.search_results_frame.columnconfigure(0, weight=1)
+        self.search_results_window = self.search_canvas.create_window(
+            (0, 0),
+            window=self.search_results_frame,
+            anchor="nw",
+        )
+        self.search_results_frame.bind(
+            "<Configure>",
+            lambda _event: self.search_canvas.configure(
+                scrollregion=self.search_canvas.bbox("all")
+            ),
+        )
+        self.search_canvas.bind(
+            "<Configure>",
+            lambda event: self.search_canvas.itemconfigure(
+                self.search_results_window,
+                width=event.width,
+            ),
+        )
+        self.search_empty_state = ttk.Label(
+            self.search_results_frame,
+            text="Escribe una búsqueda arriba para encontrar videos.",
+            style="PanelMuted.TLabel",
+            font=("Segoe UI", 11),
+            anchor="center",
+            padding=24,
+        )
+        self.search_empty_state.grid(row=0, column=0, sticky="ew")
+
+        search_queue_panel = ttk.Frame(
+            self.search_page,
+            style="Panel.TFrame",
+            padding=10,
+        )
+        search_queue_panel.grid(
+            row=2,
+            column=1,
+            rowspan=2,
+            sticky="nsew",
+            padx=(12, 0),
+            pady=(4, 0),
+        )
+        search_queue_panel.columnconfigure(0, weight=1)
+        search_queue_panel.rowconfigure(2, weight=1)
+        ttk.Label(
+            search_queue_panel,
+            text="Tu lista",
+            style="Panel.TLabel",
+            font=("Segoe UI", 12, "bold"),
+        ).grid(row=0, column=0, sticky="w")
+        self.search_queue_count_label = ttk.Label(
+            search_queue_panel,
+            text="0 videos añadidos",
+            style="PanelMuted.TLabel",
+            font=("Segoe UI", 8),
+        )
+        self.search_queue_count_label.grid(
+            row=1, column=0, sticky="w", pady=(2, 8)
+        )
+        self.search_queue_canvas = tk.Canvas(
+            search_queue_panel,
+            background=self.palette["surface"],
+            highlightthickness=0,
+            borderwidth=0,
+        )
+        self.search_queue_scrollbar = SubtleScrollbar(
+            search_queue_panel,
+            command=self.search_queue_canvas.yview,
+            palette=self.palette,
+        )
+        self.search_queue_canvas.configure(
+            yscrollcommand=self.search_queue_scrollbar.set
+        )
+        self.search_queue_canvas.grid(row=2, column=0, sticky="nsew")
+        self.search_queue_scrollbar.grid(
+            row=2, column=1, sticky="ns", padx=(3, 0)
+        )
+        self.search_queue_frame = ttk.Frame(
+            self.search_queue_canvas,
+            style="Panel.TFrame",
+        )
+        self.search_queue_frame.columnconfigure(0, weight=1)
+        self.search_queue_window = self.search_queue_canvas.create_window(
+            (0, 0),
+            window=self.search_queue_frame,
+            anchor="nw",
+        )
+        self.search_queue_frame.bind(
+            "<Configure>",
+            lambda _event: self.search_queue_canvas.configure(
+                scrollregion=self.search_queue_canvas.bbox("all")
+            ),
+        )
+        self.search_queue_canvas.bind(
+            "<Configure>",
+            lambda event: self.search_queue_canvas.itemconfigure(
+                self.search_queue_window,
+                width=event.width,
+            ),
+        )
+        self.search_queue_empty_label = ttk.Label(
+            self.search_queue_frame,
+            text="Añade videos desde los resultados.",
+            style="PanelMuted.TLabel",
+            font=("Segoe UI", 9),
+            wraplength=150,
+            justify="left",
+            padding=(2, 10),
+        )
+        self.search_queue_empty_label.grid(row=0, column=0, sticky="ew")
+        self.search_queue_download_button = self._create_button(
+            search_queue_panel,
+            text="Revisar y descargar",
+            command=self._toggle_search_queue_view,
+            variant="primary",
+            background_role="surface",
+        )
+        self.search_queue_download_button.grid(
+            row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0), ipady=3
+        )
+        self._refresh_search_queue_sidebar()
+        self.root.bind_all("<MouseWheel>", self._scroll_under_pointer)
+        self.root.bind_all("<Button-4>", self._scroll_under_pointer)
+        self.root.bind_all("<Button-5>", self._scroll_under_pointer)
+
     def _update_scroll_region(self, _event: tk.Event) -> None:
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
@@ -414,8 +663,21 @@ class LayoutMixin:
     def _update_empty_state(self) -> None:
         if not hasattr(self, "canvas"):
             return
+        if self.download_mode.get() == "search":
+            if self._search_view == "queue":
+                empty_text = "Tu cola está vacía\nBusca videos y añádelos para descargarlos."
+            elif self._search_query:
+                empty_text = "No se encontraron videos.\nPrueba con otros términos de búsqueda."
+            else:
+                empty_text = "Busca canciones, artistas o videos de YouTube."
+        else:
+            empty_text = (
+                "Tus canciones aparecerán aquí\n"
+                "Pega un enlace y obtén la información para empezar."
+            )
         self.canvas.itemconfigure(
             self.empty_state,
+            text=empty_text,
             state="hidden" if self.items else "normal",
             fill=self.palette["muted"],
         )
@@ -423,9 +685,46 @@ class LayoutMixin:
     def _resize_items_frame(self, event: tk.Event) -> None:
         self.canvas.itemconfigure(self.items_window, width=event.width)
 
-    def _scroll_items(self, event: tk.Event) -> None:
-        if self.canvas.winfo_exists():
-            self.canvas.yview_scroll(int(-event.delta / 120), "units")
+    def _scroll_under_pointer(self, event: tk.Event) -> str | None:
+        try:
+            widget = self.root.winfo_containing(event.x_root, event.y_root)
+        except tk.TclError:
+            return None
+        scrollbars = {
+            self.scrollbar: self.canvas,
+            self.search_scrollbar: self.search_canvas,
+            self.search_queue_scrollbar: self.search_queue_canvas,
+        }
+        canvases = {
+            self.canvas,
+            self.search_canvas,
+            self.search_queue_canvas,
+        }
+        while widget is not None:
+            if widget in scrollbars:
+                canvas = scrollbars[widget]
+                break
+            if widget in canvases:
+                canvas = widget
+                break
+            widget = getattr(widget, "master", None)
+        else:
+            return None
+
+        if not canvas.winfo_exists():
+            return None
+        if getattr(event, "num", None) == 4:
+            units = -1
+        elif getattr(event, "num", None) == 5:
+            units = 1
+        else:
+            delta = event.delta
+            units = -int(delta / 120)
+            if units == 0 and delta:
+                units = -1 if delta > 0 else 1
+        if units:
+            canvas.yview_scroll(units, "units")
+        return "break"
 
     def _choose_folder(self) -> None:
         folder = filedialog.askdirectory(
@@ -479,8 +778,17 @@ class LayoutMixin:
         self._close_clip_editor()
         self.metadata_ready = False
         self.clip_section = None
-        self.items.clear()
+        self.search_results = []
+        if self.download_mode.get() == "search":
+            self._search_view = "results"
+            self._search_query = ""
+            self._show_search_result_cards([])
+        self.items = []
         self.item_widgets.clear()
+        if self.download_mode.get() == "search":
+            self.queue_headings.grid_remove()
+        else:
+            self.queue_headings.grid()
         for child in self.items_frame.winfo_children():
             child.destroy()
         self._update_empty_state()
@@ -493,7 +801,11 @@ class LayoutMixin:
         self._update_selection_count()
         self.download_all_button.configure(state="disabled")
         self.bottom_action_button.configure(state="disabled")
-        self.analyze_button.configure(text="Analizar playlist", state="normal")
+        self.analyze_button.configure(
+            text="Buscar videos" if self.download_mode.get() == "search"
+            else "Analizar playlist",
+            state="normal",
+        )
         self._update_clip_editor_button()
         self.status.set("Pega un enlace para comenzar.")
         self.canvas.yview_moveto(0)
@@ -501,9 +813,25 @@ class LayoutMixin:
     def _show_items(self, items: list[dict[str, Any]]) -> None:
         self.items = items
         self.item_widgets.clear()
+        search_results_view = (
+            self.download_mode.get() == "search" and self._search_view == "results"
+        )
+        search_queue_view = (
+            self.download_mode.get() == "search" and self._search_view == "queue"
+        )
+        if search_results_view:
+            self.queue_headings.grid_remove()
+        else:
+            self.queue_headings.grid()
         self._update_empty_state()
         for child in self.items_frame.winfo_children():
             child.destroy()
+        self._prune_destroyed_buttons()
+
+        if search_results_view:
+            self._show_search_result_cards(items)
+            self.search_canvas.yview_moveto(0)
+            return
 
         for index, item in enumerate(items):
             row = ttk.Frame(
@@ -514,7 +842,7 @@ class LayoutMixin:
             row.grid(row=index, column=0, sticky="ew")
             for column, weight, minsize in (
                 (0, 0, 36), (1, 0, 42), (2, 3, 304), (3, 0, 70),
-                (4, 0, 80), (5, 3, 180), (6, 0, 120), (7, 0, 70),
+                (4, 0, 80), (5, 3, 180), (6, 0, 120), (7, 0, 90),
             ):
                 row.columnconfigure(column, weight=weight, minsize=minsize)
 
@@ -604,13 +932,26 @@ class LayoutMixin:
             actions = ttk.Frame(row, style="Panel.TFrame")
             actions.grid(row=0, column=7, sticky="e", padx=(2, 0))
             pause = self._create_button(
-                actions, text="Ⅱ", width=2, height=30, state="disabled",
-                background_role="surface"
+                actions,
+                text="Ⅱ",
+                width=2,
+                height=30,
+                state="disabled",
+                background_role="surface",
             )
             pause.pack(side="left", padx=1)
             cancel = self._create_button(
-                actions, text="×", width=2, height=30, state="disabled",
-                background_role="surface"
+                actions,
+                text="×",
+                width=2,
+                height=30,
+                state="normal" if search_queue_view else "disabled",
+                command=(
+                    lambda item_index=index: self._remove_search_queue_item(
+                        item_index
+                    )
+                ) if search_queue_view else None,
+                background_role="surface",
             )
             cancel.pack(side="left", padx=1)
             show_location = self._create_button(
@@ -625,24 +966,210 @@ class LayoutMixin:
                 background_role="surface",
             )
             show_location.pack(side="left", padx=1)
-            self.item_widgets.append(
-                {
-                    "card": row,
-                    "cover": cover,
-                    "progress": progress,
-                    "status": item_status,
-                    "percentage": percentage,
-                    "speed": speed,
-                    "selected": selected,
-                    "checkbox": checkbox,
-                    "image": None,
-                    "show_location": show_location,
-                    "output_path": None,
-                }
-            )
+            item_widget = {
+                "card": row,
+                "cover": cover,
+                "progress": progress,
+                "status": item_status,
+                "percentage": percentage,
+                "speed": speed,
+                "selected": selected,
+                "checkbox": checkbox,
+                "image": None,
+                "output_path": None,
+            }
+            item_widget["show_location"] = show_location
+            self.item_widgets.append(item_widget)
+            if item.get("_thumbnail_data"):
+                self._set_thumbnail(index, item["_thumbnail_data"])
         self.select_all.set(bool(items))
+        self.select_all_checkbox.configure(
+            state="disabled" if search_results_view else "normal"
+        )
         self._update_selection_count()
         self.canvas.yview_moveto(0)
+
+    def _show_search_result_cards(self, items: list[dict[str, Any]]) -> None:
+        for child in self.search_results_frame.winfo_children():
+            child.destroy()
+        self._prune_destroyed_buttons()
+        self.item_widgets.clear()
+        for column in range(3):
+            self.search_results_frame.columnconfigure(column, weight=1, uniform="search")
+        if not items:
+            self.search_empty_state = ttk.Label(
+                self.search_results_frame,
+                text="No se encontraron videos. Prueba con otra búsqueda.",
+                style="PanelMuted.TLabel",
+                font=("Segoe UI", 11),
+                anchor="center",
+                padding=24,
+            )
+            self.search_empty_state.grid(row=0, column=0, sticky="ew")
+            return
+
+        for index, item in enumerate(items):
+            card = ttk.Frame(
+                self.search_results_frame,
+                style="QueueRow.TFrame",
+                padding=8,
+            )
+            card.grid(
+                row=index // 3,
+                column=index % 3,
+                sticky="nsew",
+                pady=4,
+                padx=4,
+            )
+            card.columnconfigure(0, weight=1)
+
+            cover_frame = ttk.Frame(
+                card,
+                width=160,
+                height=90,
+                style="QueueRow.TFrame",
+            )
+            cover_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+            cover_frame.grid_propagate(False)
+            cover = ttk.Label(
+                cover_frame,
+                text="▶",
+                anchor="center",
+                style="Cover.TLabel",
+            )
+            cover.pack(fill="both", expand=True)
+
+            title = ttk.Label(
+                card,
+                text=item["title"],
+                style="Panel.TLabel",
+                font=("Segoe UI", 9, "bold"),
+                wraplength=160,
+                justify="left",
+            )
+            title.grid(row=1, column=0, sticky="nw", pady=(0, 5))
+            channel = ttk.Label(
+                card,
+                text=item.get("artist") or "Canal desconocido",
+                style="PanelMuted.TLabel",
+                font=("Segoe UI", 8),
+                wraplength=160,
+            )
+            channel.grid(row=2, column=0, sticky="nw", pady=(0, 3))
+            duration = ttk.Label(
+                card,
+                text=f"Duración: {self._format_duration(item.get('duration'))}",
+                style="PanelMuted.TLabel",
+                font=("Segoe UI", 8),
+            )
+            duration.grid(row=3, column=0, sticky="nw", pady=(0, 8))
+
+            already_added = any(
+                queued.get("url") == item.get("url")
+                for queued in self.search_queue
+            )
+            actions = ttk.Frame(card, style="QueueRow.TFrame")
+            actions.grid(row=4, column=0, sticky="e")
+            play_button = self._create_button(
+                actions,
+                text="▶",
+                command=lambda item_index=index: self._open_search_preview(
+                    item_index
+                ),
+                variant="primary",
+                background_role="surface",
+                width=3,
+                height=30,
+            )
+            play_button.pack(side="left", padx=(0, 5))
+            add_button = self._create_button(
+                actions,
+                text="+",
+                command=lambda item_index=index: self._add_search_result(item_index),
+                variant="primary",
+                state="disabled" if already_added else "normal",
+                background_role="surface",
+                width=3,
+                height=30,
+            )
+            add_button.pack(side="left")
+
+            selected = tk.BooleanVar(value=False)
+            checkbox = ttk.Checkbutton(
+                card,
+                variable=selected,
+                style="Panel.TCheckbutton",
+                state="disabled",
+            )
+            self.item_widgets.append(
+                {
+                    "card": card,
+                    "cover": cover,
+                    "image": None,
+                    "selected": selected,
+                    "checkbox": checkbox,
+                    "add_button": add_button,
+                    "play_button": play_button,
+                    "thumbnail_size": (160, 90),
+                }
+            )
+            if item.get("_thumbnail_data"):
+                self._set_thumbnail(index, item["_thumbnail_data"])
+        self.select_all.set(False)
+        self._update_selection_count()
+
+    def _refresh_search_queue_sidebar(self) -> None:
+        if not hasattr(self, "search_queue_frame"):
+            return
+        for child in self.search_queue_frame.winfo_children():
+            child.destroy()
+        count = len(self.search_queue)
+        noun = "video añadido" if count == 1 else "videos añadidos"
+        self.search_queue_count_label.configure(text=f"{count} {noun}")
+        self.search_queue_download_button.configure(
+            text="Revisar y descargar" if count else "La lista está vacía",
+            state="normal" if count else "disabled",
+        )
+        if not count:
+            self.search_queue_empty_label = ttk.Label(
+                self.search_queue_frame,
+                text="Añade videos desde los resultados.",
+                style="PanelMuted.TLabel",
+                font=("Segoe UI", 9),
+                wraplength=150,
+                justify="left",
+                padding=(2, 10),
+            )
+            self.search_queue_empty_label.grid(row=0, column=0, sticky="ew")
+        for index, item in enumerate(self.search_queue):
+            row = ttk.Frame(
+                self.search_queue_frame,
+                style="QueueRow.TFrame",
+                padding=(6, 5),
+            )
+            row.grid(row=index, column=0, sticky="ew", pady=(0, 5))
+            row.columnconfigure(0, weight=1)
+            title = ttk.Label(
+                row,
+                text=item["title"],
+                style="Panel.TLabel",
+                font=("Segoe UI", 8, "bold"),
+                wraplength=140,
+                justify="left",
+            )
+            title.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+            remove_button = ttk.Button(
+                row,
+                text="×",
+                command=lambda item_index=index: self._remove_search_queue_sidebar_item(item_index),
+                style="Icon.TButton",
+            )
+            remove_button.grid(row=0, column=1, sticky="ne")
+
+    def _prune_destroyed_buttons(self) -> None:
+        self.rounded_buttons = [
+            button for button in self.rounded_buttons if button.winfo_exists()
+        ]
 
     def _open_download_location(self, index: int) -> None:
         """Open Explorer with the completed audio file selected."""
@@ -698,7 +1225,12 @@ class LayoutMixin:
 
     def _set_thumbnail(self, index: int, image_data: bytes) -> None:
         try:
-            photo = create_thumbnail(image_data, (72, 44))
+            photo = create_thumbnail(
+                image_data,
+                self.item_widgets[index].get("thumbnail_size", (72, 44)),
+            )
+            if 0 <= index < len(self.items):
+                self.items[index]["_thumbnail_data"] = image_data
             cover = self.item_widgets[index]["cover"]
             cover.configure(image=photo, text="")
             self.item_widgets[index]["image"] = photo
@@ -725,6 +1257,7 @@ class LayoutMixin:
         self.details_visible = not self.details_visible
 
     def _set_loading(self, active: bool) -> None:
+        self._loading = active
         if active:
             self.loading_bar.grid()
             self.loading_bar.start(12)
@@ -742,10 +1275,16 @@ class LayoutMixin:
         state = "normal" if enabled else "disabled"
         self.url_entry.configure(state=state)
         self.paste_button.configure(state=state)
-        self.analyze_button.configure(state=state, text="Analizar playlist")
+        analyze_text = (
+            "Buscar videos"
+            if self.download_mode.get() == "search"
+            else "Analizar playlist"
+        )
+        self.analyze_button.configure(state=state, text=analyze_text)
         self.folder_button.configure(state=state)
         self.single_radio.configure(state=state)
         self.playlist_radio.configure(state=state)
+        self.search_radio.configure(state=state)
         self.download_all_button.configure(state=state)
         self.bottom_action_button.configure(state=state)
         if not enabled:
@@ -754,5 +1293,10 @@ class LayoutMixin:
             self._update_clip_editor_button()
         self.select_all_checkbox.configure(state=state)
         self.embed_checkbox.configure(state=state)
+        self.search_entry.configure(state=state)
+        self.search_page_button.configure(state=state)
+        self.search_single_button.configure(state=state)
+        self.search_playlist_button.configure(state=state)
+        self._update_search_queue_button()
         for widgets in self.item_widgets:
             widgets["checkbox"].configure(state=state)

@@ -44,17 +44,14 @@ def create_video_player(
         if instance is None:
             raise RuntimeError("VLC no pudo inicializar su motor multimedia.")
         player = instance.media_player_new()
-        media = instance.media_new(stream_url)
-        for headers in (http_headers, audio_http_headers or {}):
-            for header, value in headers.items():
-                normalized = header.lower().replace("_", "-")
-                if normalized in {"user-agent", "referer", "cookie"}:
-                    media.add_option(f":http-{normalized}={value}")
-        player.set_media(media)
-        if audio_stream_url and player.add_slave(
-            vlc.MediaSlaveType.audio, audio_stream_url, True
-        ) != 0:
-            raise RuntimeError("VLC no pudo añadir el audio a la vista previa.")
+        set_video_source(
+            instance,
+            player,
+            stream_url,
+            http_headers,
+            audio_stream_url,
+            audio_http_headers,
+        )
         video_frame.update_idletasks()
         if hasattr(player, "set_hwnd"):
             player.set_hwnd(video_frame.winfo_id())
@@ -68,3 +65,32 @@ def create_video_player(
             "No se pudo iniciar la vista previa. Instala VLC media player "
             "de 64 bits y vuelve a abrir youMP3gmr."
         ) from error
+
+
+def set_video_source(
+    instance: Any,
+    player: Any,
+    stream_url: str,
+    http_headers: dict[str, str],
+    audio_stream_url: str | None = None,
+    audio_http_headers: dict[str, str] | None = None,
+) -> None:
+    """Replace the active VLC media while preserving the embedded player."""
+    try:
+        import vlc
+
+        media = instance.media_new(stream_url)
+        for headers in (http_headers, audio_http_headers or {}):
+            for header, value in headers.items():
+                normalized = header.lower().replace("_", "-")
+                if normalized in {"user-agent", "referer", "cookie"}:
+                    media.add_option(f":http-{normalized}={value}")
+        player.set_media(media)
+        if audio_stream_url and player.add_slave(
+            vlc.MediaSlaveType.audio, audio_stream_url, True
+        ) != 0:
+            raise RuntimeError("VLC no pudo añadir el audio a la vista previa.")
+    except RuntimeError:
+        raise
+    except Exception as error:
+        raise RuntimeError("VLC no pudo cambiar el formato de reproducción.") from error

@@ -44,11 +44,21 @@ class AudioPlaylistDownloader(ThemeMixin, LayoutMixin, DownloadControllerMixin):
         self.status = tk.StringVar(value="Pega un enlace para comenzar.")
         self.items: list[dict[str, Any]] = []
         self.item_widgets: list[dict[str, Any]] = []
+        self.search_queue: list[dict[str, Any]] = []
+        self.search_results: list[dict[str, Any]] = []
+        self.search_query = tk.StringVar()
+        self._search_generation = 0
+        self._search_view = "results"
+        self._search_query = ""
+        self._loading = False
         self.metadata_ready = False
         self.downloading = False
         self.details_visible = False
         self.clip_section: tuple[float, float] | None = None
         self.clip_editor_window = None
+        self.search_preview_window = None
+        self._search_preview_loading = False
+        self._search_preview_generation = 0
         self._preview_loading = False
         self._vlc_available = is_vlc_available()
         self._vlc_installing = False
@@ -135,4 +145,10 @@ class AudioPlaylistDownloader(ThemeMixin, LayoutMixin, DownloadControllerMixin):
             self.maximize_button.set_text("❐")
 
     def _close_window(self) -> None:
+        if self.search_preview_window is not None:
+            try:
+                if self.search_preview_window.window.winfo_exists():
+                    self.search_preview_window.close()
+            except tk.TclError:
+                pass
         self.root.destroy()

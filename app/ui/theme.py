@@ -46,6 +46,11 @@ class ThemeMixin:
             foreground=colors["text"],
         )
         self.style.configure(
+            "SearchPageTitle.TLabel",
+            background=colors["background"],
+            foreground=colors["text"],
+        )
+        self.style.configure(
             "Path.TLabel",
             background=colors["field"],
             foreground=colors["muted"],
@@ -284,8 +289,13 @@ class ThemeMixin:
             darkcolor=colors["cyan"],
         )
         self.canvas.configure(background=colors["surface"])
+        self.search_canvas.configure(background=colors["surface"])
+        self.search_queue_canvas.configure(background=colors["surface"])
         self.scrollbar.set_palette(colors)
+        self.search_scrollbar.set_palette(colors)
+        self.search_queue_scrollbar.set_palette(colors)
         self.url_entry.set_palette(colors)
+        self.search_entry.set_palette(colors)
         self._update_empty_state()
         self.canvas.itemconfigure("empty-state", fill=colors["muted"])
         self.playlist_cover.configure(style="Cover.TLabel")
