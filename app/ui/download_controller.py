@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from pathlib import Path
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, simpledialog
 from typing import Any
 from urllib.error import URLError
 from urllib.parse import parse_qs, urlencode, urlsplit
@@ -792,6 +792,25 @@ class DownloadControllerMixin:
                 "Selecciona al menos una canción de la cola.",
             )
             return
+        audio_language = None
+        if self.download_mode.get() == "single" and len(selected_indices) == 1:
+            tracks = self.items[selected_indices[0]].get("audio_tracks") or []
+            if len(tracks) > 1:
+                choices = "\n".join(
+                    f"{index + 1}. {track['label']} ({track['language']})"
+                    for index, track in enumerate(tracks)
+                )
+                selected_track = simpledialog.askinteger(
+                    "Elegir pista de audio",
+                    "Este video tiene varias pistas de audio. Escribe el número "
+                    f"del idioma que quieres descargar:\n\n{choices}",
+                    parent=self.root,
+                    minvalue=1,
+                    maxvalue=len(tracks),
+                )
+                if selected_track is None:
+                    return
+                audio_language = tracks[selected_track - 1]["language"]
         output_directory = Path(self.output_directory.get()).expanduser()
         if not output_directory.is_dir():
             messagebox.showerror(
@@ -824,6 +843,7 @@ class DownloadControllerMixin:
                 self.concurrent_downloads,
                 self.download_mode.get() == "playlist",
                 self.music_styles.copy(),
+                audio_language,
             ),
             daemon=True,
         ).start()
@@ -838,6 +858,7 @@ class DownloadControllerMixin:
         max_workers: int = 2,
         playlist_mode: bool = False,
         music_styles: list[str] | None = None,
+        audio_language: str | None = None,
     ) -> None:
         """Download selected tracks concurrently and publish worker events."""
         playlist_name: str | None = None
@@ -895,6 +916,7 @@ class DownloadControllerMixin:
                     self.messages,
                     embed_metadata,
                     clip_section if single_video else None,
+                    audio_language if single_video else None,
                 )
                 self.messages.put(("item_done", (index, output_path)))
             except Exception as error:

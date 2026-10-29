@@ -310,6 +310,19 @@ class YtDlpMediaProvider:
                     )
             elif candidate_url:
                 item_url = candidate_url
+        audio_tracks: dict[str, dict[str, Any]] = {}
+        for media_format in info.get("formats") or []:
+            language = media_format.get("language")
+            if not language or media_format.get("acodec") in (None, "none"):
+                continue
+            track = audio_tracks.setdefault(language, {
+                "language": language,
+                "label": media_format.get("format_note") or language,
+                "preference": media_format.get("language_preference") or -1,
+            })
+            if media_format.get("language_preference", -1) > track["preference"]:
+                track["preference"] = media_format.get("language_preference")
+                track["label"] = media_format.get("format_note") or language
         return {
             "title": info.get("title") or "Título desconocido",
             "artist": info.get("artist")
@@ -319,6 +332,10 @@ class YtDlpMediaProvider:
             "duration": info.get("duration"),
             "thumbnail": thumbnail_url,
             "url": item_url,
+            "audio_tracks": sorted(
+                audio_tracks.values(),
+                key=lambda track: (-track["preference"], track["language"]),
+            ),
         }
 
     @staticmethod
@@ -346,6 +363,7 @@ class YtDlpMediaProvider:
         messages: queue.Queue[tuple[str, object]],
         embed_metadata: bool = True,
         clip_section: tuple[float, float] | None = None,
+        audio_language: str | None = None,
     ) -> Path | None:
         """Download a track and optionally embed its cover and audio metadata."""
         final_path: Path | None = None
@@ -375,7 +393,10 @@ class YtDlpMediaProvider:
             )
 
         options = {
-            "format": "bestaudio/best",
+            "format": (
+                f"bestaudio[language={audio_language}]/bestaudio/best"
+                if audio_language else "bestaudio/best"
+            ),
             "outtmpl": str(output_path),
             "noplaylist": True,
             "ignoreerrors": False,
