@@ -38,43 +38,42 @@ cambia yt-dlp, el punto principal de integración es
 `app/services/media_provider.py`. El acceso a Pillow está centralizado en
 `app/ui/image_adapter.py`.
 
-## Requisitos e instalación (Windows)
+## Requisitos e instalación local (Windows)
 
-Para descargar y convertir audio, cada persona debe instalar:
+Para ejecutar el proyecto desde el código fuente, instala Python y FFmpeg en el equipo y las dependencias Python dentro de un entorno virtual local. Esta sección es para trabajar con el proyecto en local; no requiere usar el ejecutable portable.
 
-1. **Python 3.10 o posterior**, desde [python.org](https://www.python.org/downloads/windows/).
-   Durante la instalación, activa **Add Python to PATH**. Tkinter viene incluido
-   con el instalador oficial de Python para Windows.
-2. **FFmpeg**, necesario para convertir las descargas a MP3. Se puede instalar
-   con `winget` desde PowerShell:
+1. **Python 3.10 o posterior**, desde [python.org](https://www.python.org/downloads/windows/). Durante la instalación activa **Add Python to PATH**. El instalador oficial de Windows incluye Tkinter, que usa la interfaz gráfica.
+2. **FFmpeg**, necesario para convertir el audio descargado a MP3. Puedes instalarlo con `winget` desde PowerShell:
 
    ```powershell
    winget install --id Gyan.FFmpeg.Shared --exact
    ```
 
-   Si winget no está disponible, instala una compilación de FFmpeg y agrega la
-   carpeta que contiene `ffmpeg.exe` al `PATH` de Windows. Cierra y vuelve a
-   abrir PowerShell después de instalarlo. Comprueba que esté disponible con:
+   Si lo instalas manualmente, agrega al `PATH` la carpeta que contiene `ffmpeg.exe`. Abre una nueva ventana de PowerShell y comprueba la instalación:
 
    ```powershell
    ffmpeg -version
    ```
 
-3. **Los paquetes de Python del proyecto**, instalados desde la carpeta que
-   contiene `requirements.txt`. yt-dlp, Pillow y python-vlc se instalan con este
-   paso; no hace falta instalarlos por separado.
+3. **Dependencias Python del proyecto**: `yt-dlp` para buscar y descargar medios, `Pillow` para las imágenes y `python-vlc` para conectar la aplicación con VLC en las vistas previas. Están declaradas en `requirements.txt`; no hace falta instalarlas una por una.
+
+   Desde PowerShell, sitúate en la carpeta del proyecto y ejecuta:
 
    ```powershell
-   py -m pip install -r requirements.txt
+   py -m venv .venv
+   .\.venv\Scripts\python.exe -m pip install --upgrade pip
+   .\.venv\Scripts\python.exe -m pip install -r requirements.txt
    ```
 
-Para obtener el proyecto, clona el repositorio o descarga y extrae su ZIP desde
-GitHub. Después, abre PowerShell en la carpeta del proyecto y ejecuta:
+   Esto crea `.venv` dentro del proyecto e instala los paquetes allí, sin modificar la instalación global de Python. Para iniciar la aplicación:
 
-```powershell
-py main.py
-```
+   ```powershell
+   .\.venv\Scripts\python.exe main.py
+   ```
 
+   Si prefieres activar el entorno primero, puedes usar `\.venv\Scripts\Activate.ps1` y luego `python main.py`.
+
+**Opcional: vistas previas de video.** Para reproducir videos dentro de la aplicación, instala **VLC media player de 64 bits**. `python-vlc` ya queda instalado con `requirements.txt`, pero necesita el reproductor VLC instalado por separado. Si VLC falta, el botón **Instalar VLC** de la aplicación puede ofrecer instalarlo con winget o abrir la página oficial. Reinicia la aplicación después de instalar VLC. VLC no es necesario para descargar canciones completas o playlists.
 ## Crear un ejecutable de Windows
 
 Puedes empaquetar la aplicación con PyInstaller. El ejecutable incluye Python
